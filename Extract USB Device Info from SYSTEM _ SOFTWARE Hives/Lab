@@ -1,0 +1,661 @@
+Extract USB Device Info from SYSTEM & SOFTWARE Hives
+Learning Objectives
+By completing this lab, you will:
+
+Extract USB device information from Windows registry hives using open-source tools
+Parse SYSTEM and SOFTWARE registry hives for forensic analysis
+Correlate USB device data with Windows event logs
+Understand USB device tracking mechanisms in Windows forensics
+Prerequisites
+Basic understanding of Windows registry structure
+Familiarity with Linux command line operations
+Knowledge of forensic analysis concepts
+Understanding of hexadecimal and binary data formats
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux machine. The provided system is bare metal with no pre-installed forensic tools, so you will install the required open-source tools during the lab.
+
+Required Tools
+python3 and pip3 for Python-based registry tools
+regipy - Python library for Windows registry parsing
+volatility3 - Memory forensics framework
+libregf-utils - Registry file parsing utilities
+Task 1: Environment Setup and Tool Installation
+Subtask 1.1: Update System and Install Dependencies
+# Update package manager
+sudo apt update && sudo apt upgrade -y
+
+# Install Python and development tools
+sudo apt install -y python3 python3-pip git build-essential
+
+# Install system dependencies
+sudo apt install -y libregf-utils libregf-dev
+Subtask 1.2: Install Python Registry Tools
+# Install regipy for registry parsing
+pip3 install regipy
+
+# Install additional forensic libraries
+pip3 install python-registry yara-python
+
+# Verify installations
+regipy-plugins-list
+regfinfo --version
+Subtask 1.3: Create Sample Registry Files
+# Create working directory
+mkdir ~/usb_forensics && cd ~/usb_forensics
+
+# Download sample Windows registry hives (simulated)
+# Create mock SYSTEM hive structure
+mkdir -p sample_hives
+
+# Create a simple test registry structure
+cat > create_test_data.py << 'EOF'
+#!/usr/bin/env python3
+import os
+import struct
+
+def create_mock_registry_data():
+    """Create mock USB registry entries for testing"""
+    
+    # Mock SYSTEM hive USB data
+    system_data = {
+        'USB_Devices': [
+            {
+                'VID': '0781',  # SanDisk
+                'PID': '5567',  # Cruzer Blade
+                'Serial': '4C530001071227117433',
+                'LastWrite': '2024-01-15 14:30:22'
+            },
+            {
+                'VID': '058F',  # Alcor Micro
+                'PID': '6387',  # Flash Drive
+                'Serial': '058F63876583',
+                'LastWrite': '2024-01-10 09:15:45'
+            }
+        ]
+    }
+    
+    # Write mock data to file
+    with open('mock_system_usb.txt', 'w') as f:
+        f.write("Mock USB Device Registry Data\n")
+        f.write("=" * 40 + "\n")
+        for device in system_data['USB_Devices']:
+            f.write(f"VID: {device['VID']}\n")
+            f.write(f"PID: {device['PID']}\n")
+            f.write(f"Serial: {device['Serial']}\n")
+            f.write(f"Last Write: {device['LastWrite']}\n")
+            f.write("-" * 30 + "\n")
+    
+    print("Mock registry data created successfully")
+
+if __name__ == "__main__":
+    create_mock_registry_data()
+EOF
+
+python3 create_test_data.py
+Task 2: Parse SYSTEM and SOFTWARE Hives for USB Device Data
+Subtask 2.1: Create USB Device Parser Script
+cat > usb_device_parser.py << 'EOF'
+#!/usr/bin/env python3
+import re
+import json
+from datetime import datetime
+
+class USBDeviceParser:
+    def __init__(self):
+        self.usb_devices = []
+        self.vendor_codes = {
+            '0781': 'SanDisk',
+            '058F': 'Alcor Micro',
+            '090C': 'Silicon Motion',
+            '0951': 'Kingston Technology',
+            '1058': 'Western Digital'
+        }
+    
+    def parse_usb_registry_data(self, data_file):
+        """Parse USB device information from registry data"""
+        try:
+            with open(data_file, 'r') as f:
+                content = f.read()
+            
+            # Extract USB device information using regex
+            vid_pattern = r'VID: ([A-F0-9]{4})'
+            pid_pattern = r'PID: ([A-F0-9]{4})'
+            serial_pattern = r'Serial: ([A-F0-9]+)'
+            time_pattern = r'Last Write: ([\d\-\s:]+)'
+            
+            vids = re.findall(vid_pattern, content)
+            pids = re.findall(pid_pattern, content)
+            serials = re.findall(serial_pattern, content)
+            times = re.findall(time_pattern, content)
+            
+            # Combine extracted data
+            for i in range(len(vids)):
+                device = {
+                    'vendor_id': vids[i],
+                    'product_id': pids[i],
+                    'serial_number': serials[i],
+                    'last_write_time': times[i],
+                    'vendor_name': self.vendor_codes.get(vids[i], 'Unknown'),
+                    'device_key': f"VID_{vids[i]}&PID_{pids[i]}"
+                }
+                self.usb_devices.append(device)
+            
+            return True
+        except Exception as e:
+            print(f"Error parsing registry data: {e}")
+            return False
+    
+    def generate_timeline(self):
+        """Generate timeline of USB device connections"""
+        timeline = []
+        for device in self.usb_devices:
+            timeline.append({
+                'timestamp': device['last_write_time'],
+                'event': 'USB Device Registry Update',
+                'device': f"{device['vendor_name']} ({device['device_key']})",
+                'serial': device['serial_number']
+            })
+        
+        # Sort by timestamp
+        timeline.sort(key=lambda x: x['timestamp'])
+        return timeline
+    
+    def export_results(self, output_file):
+        """Export parsed results to JSON"""
+        results = {
+            'total_devices': len(self.usb_devices),
+            'devices': self.usb_devices,
+            'timeline': self.generate_timeline(),
+            'analysis_timestamp': datetime.now().isoformat()
+        }
+        
+        with open(output_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        
+        print(f"Results exported to {output_file}")
+    
+    def display_summary(self):
+        """Display summary of found USB devices"""
+        print("\n" + "="*50)
+        print("USB DEVICE FORENSIC ANALYSIS SUMMARY")
+        print("="*50)
+        print(f"Total USB Devices Found: {len(self.usb_devices)}")
+        print("-"*50)
+        
+        for i, device in enumerate(self.usb_devices, 1):
+            print(f"Device {i}:")
+            print(f"  Vendor: {device['vendor_name']} ({device['vendor_id']})")
+            print(f"  Product ID: {device['product_id']}")
+            print(f"  Serial Number: {device['serial_number']}")
+            print(f"  Last Registry Update: {device['last_write_time']}")
+            print(f"  Device Key: {device['device_key']}")
+            print("-"*30)
+
+if __name__ == "__main__":
+    parser = USBDeviceParser()
+    
+    # Parse the mock registry data
+    if parser.parse_usb_registry_data('mock_system_usb.txt'):
+        parser.display_summary()
+        parser.export_results('usb_analysis_results.json')
+    else:
+        print("Failed to parse registry data")
+EOF
+
+# Run the USB device parser
+python3 usb_device_parser.py
+Subtask 2.2: Extract Additional USB Metadata
+cat > usb_metadata_extractor.py << 'EOF'
+#!/usr/bin/env python3
+import json
+import hashlib
+from datetime import datetime
+
+class USBMetadataExtractor:
+    def __init__(self):
+        self.metadata = {}
+    
+    def extract_device_signatures(self, results_file):
+        """Extract unique device signatures for identification"""
+        try:
+            with open(results_file, 'r') as f:
+                data = json.load(f)
+            
+            signatures = []
+            for device in data['devices']:
+                # Create unique device signature
+                signature_string = f"{device['vendor_id']}{device['product_id']}{device['serial_number']}"
+                signature_hash = hashlib.md5(signature_string.encode()).hexdigest()
+                
+                signatures.append({
+                    'device_signature': signature_hash,
+                    'vendor_id': device['vendor_id'],
+                    'product_id': device['product_id'],
+                    'serial_number': device['serial_number'],
+                    'vendor_name': device['vendor_name']
+                })
+            
+            return signatures
+        except Exception as e:
+            print(f"Error extracting signatures: {e}")
+            return []
+    
+    def analyze_connection_patterns(self, results_file):
+        """Analyze USB connection patterns"""
+        try:
+            with open(results_file, 'r') as f:
+                data = json.load(f)
+            
+            patterns = {
+                'unique_vendors': set(),
+                'connection_frequency': {},
+                'time_analysis': []
+            }
+            
+            for device in data['devices']:
+                patterns['unique_vendors'].add(device['vendor_name'])
+                
+                # Count connections per vendor
+                vendor = device['vendor_name']
+                patterns['connection_frequency'][vendor] = patterns['connection_frequency'].get(vendor, 0) + 1
+                
+                # Time analysis
+                patterns['time_analysis'].append({
+                    'device': device['device_key'],
+                    'timestamp': device['last_write_time']
+                })
+            
+            patterns['unique_vendors'] = list(patterns['unique_vendors'])
+            return patterns
+        except Exception as e:
+            print(f"Error analyzing patterns: {e}")
+            return {}
+    
+    def generate_forensic_report(self, results_file):
+        """Generate comprehensive forensic report"""
+        signatures = self.extract_device_signatures(results_file)
+        patterns = self.analyze_connection_patterns(results_file)
+        
+        report = {
+            'report_metadata': {
+                'generated_at': datetime.now().isoformat(),
+                'analysis_type': 'USB Device Registry Forensics',
+                'tool_version': '1.0'
+            },
+            'device_signatures': signatures,
+            'connection_patterns': patterns,
+            'forensic_indicators': {
+                'total_unique_devices': len(signatures),
+                'vendor_diversity': len(patterns.get('unique_vendors', [])),
+                'potential_data_exfiltration_risk': 'Medium' if len(signatures) > 2 else 'Low'
+            }
+        }
+        
+        # Save report
+        with open('usb_forensic_report.json', 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        print("\n" + "="*60)
+        print("COMPREHENSIVE USB FORENSIC REPORT")
+        print("="*60)
+        print(f"Analysis Date: {report['report_metadata']['generated_at']}")
+        print(f"Total Unique Devices: {report['forensic_indicators']['total_unique_devices']}")
+        print(f"Vendor Diversity: {report['forensic_indicators']['vendor_diversity']}")
+        print(f"Risk Assessment: {report['forensic_indicators']['potential_data_exfiltration_risk']}")
+        print("-"*60)
+        
+        print("\nDevice Signatures:")
+        for sig in signatures:
+            print(f"  {sig['vendor_name']}: {sig['device_signature'][:16]}...")
+        
+        print("\nVendor Connection Frequency:")
+        for vendor, count in patterns.get('connection_frequency', {}).items():
+            print(f"  {vendor}: {count} device(s)")
+        
+        print("\nForensic report saved to: usb_forensic_report.json")
+
+if __name__ == "__main__":
+    extractor = USBMetadataExtractor()
+    extractor.generate_forensic_report('usb_analysis_results.json')
+EOF
+
+# Run metadata extraction
+python3 usb_metadata_extractor.py
+Task 3: Correlate USB Device Info with Event Logs
+Subtask 3.1: Create Mock Event Log Data
+cat > create_event_logs.py << 'EOF'
+#!/usr/bin/env python3
+import json
+from datetime import datetime, timedelta
+
+def create_mock_event_logs():
+    """Create mock Windows event logs for USB correlation"""
+    
+    # Mock event log entries
+    events = [
+        {
+            'event_id': 20001,
+            'timestamp': '2024-01-15 14:30:20',
+            'source': 'Microsoft-Windows-Kernel-PnP',
+            'description': 'Device USBSTOR\\Disk&Ven_SanDisk&Prod_Cruzer_Blade&Rev_1.00\\4C530001071227117433&0 was configured.',
+            'level': 'Information'
+        },
+        {
+            'event_id': 20003,
+            'timestamp': '2024-01-15 14:30:22',
+            'source': 'Microsoft-Windows-Kernel-PnP',
+            'description': 'Device USBSTOR\\Disk&Ven_SanDisk&Prod_Cruzer_Blade&Rev_1.00\\4C530001071227117433&0 started.',
+            'level': 'Information'
+        },
+        {
+            'event_id': 20001,
+            'timestamp': '2024-01-10 09:15:43',
+            'source': 'Microsoft-Windows-Kernel-PnP',
+            'description': 'Device USBSTOR\\Disk&Ven_Alcor&Prod_Flash_Drive&Rev_1.00\\058F63876583&0 was configured.',
+            'level': 'Information'
+        },
+        {
+            'event_id': 20003,
+            'timestamp': '2024-01-10 09:15:45',
+            'source': 'Microsoft-Windows-Kernel-PnP',
+            'description': 'Device USBSTOR\\Disk&Ven_Alcor&Prod_Flash_Drive&Rev_1.00\\058F63876583&0 started.',
+            'level': 'Information'
+        }
+    ]
+    
+    # Save mock event logs
+    with open('mock_event_logs.json', 'w') as f:
+        json.dump(events, f, indent=2)
+    
+    print("Mock event logs created successfully")
+
+if __name__ == "__main__":
+    create_mock_event_logs()
+EOF
+
+python3 create_event_logs.py
+Subtask 3.2: Implement USB-Event Log Correlation
+cat > usb_event_correlator.py << 'EOF'
+#!/usr/bin/env python3
+import json
+import re
+from datetime import datetime
+
+class USBEventCorrelator:
+    def __init__(self):
+        self.correlations = []
+    
+    def load_usb_data(self, usb_file):
+        """Load USB device data from analysis results"""
+        try:
+            with open(usb_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading USB data: {e}")
+            return None
+    
+    def load_event_logs(self, event_file):
+        """Load event log data"""
+        try:
+            with open(event_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading event logs: {e}")
+            return None
+    
+    def extract_serial_from_event(self, description):
+        """Extract serial number from event description"""
+        # Pattern to match serial numbers in event descriptions
+        pattern = r'\\([A-F0-9]{16,})&'
+        match = re.search(pattern, description)
+        return match.group(1) if match else None
+    
+    def correlate_usb_events(self, usb_data, event_data):
+        """Correlate USB registry data with event logs"""
+        correlations = []
+        
+        for device in usb_data['devices']:
+            device_correlations = {
+                'device_info': device,
+                'matching_events': [],
+                'correlation_confidence': 0
+            }
+            
+            # Find matching events
+            for event in event_data:
+                event_serial = self.extract_serial_from_event(event['description'])
+                
+                if event_serial and event_serial == device['serial_number']:
+                    device_correlations['matching_events'].append(event)
+                    device_correlations['correlation_confidence'] += 1
+                
+                # Also check for vendor/product matches in description
+                if (device['vendor_name'].lower() in event['description'].lower() or
+                    device['vendor_id'] in event['description']):
+                    device_correlations['matching_events'].append(event)
+                    device_correlations['correlation_confidence'] += 0.5
+            
+            correlations.append(device_correlations)
+        
+        return correlations
+    
+    def generate_correlation_timeline(self, correlations):
+        """Generate timeline combining USB and event data"""
+        timeline_events = []
+        
+        for correlation in correlations:
+            device = correlation['device_info']
+            
+            # Add registry event
+            timeline_events.append({
+                'timestamp': device['last_write_time'],
+                'event_type': 'Registry Update',
+                'source': 'USB Registry',
+                'device': f"{device['vendor_name']} ({device['serial_number']})",
+                'details': f"Device key: {device['device_key']}"
+            })
+            
+            # Add correlated events
+            for event in correlation['matching_events']:
+                timeline_events.append({
+                    'timestamp': event['timestamp'],
+                    'event_type': 'System Event',
+                    'source': event['source'],
+                    'device': f"{device['vendor_name']} ({device['serial_number']})",
+                    'details': event['description']
+                })
+        
+        # Sort timeline by timestamp
+        timeline_events.sort(key=lambda x: x['timestamp'])
+        return timeline_events
+    
+    def display_correlation_results(self, correlations):
+        """Display correlation analysis results"""
+        print("\n" + "="*70)
+        print("USB DEVICE - EVENT LOG CORRELATION ANALYSIS")
+        print("="*70)
+        
+        for i, correlation in enumerate(correlations, 1):
+            device = correlation['device_info']
+            confidence = correlation['correlation_confidence']
+            
+            print(f"\nDevice {i}: {device['vendor_name']}")
+            print(f"Serial Number: {device['serial_number']}")
+            print(f"Correlation Confidence: {confidence}")
+            print(f"Matching Events: {len(correlation['matching_events'])}")
+            
+            if correlation['matching_events']:
+                print("Event Details:")
+                for event in correlation['matching_events']:
+                    print(f"  - {event['timestamp']}: {event['description'][:80]}...")
+            else:
+                print("  No matching events found")
+            
+            print("-" * 50)
+    
+    def export_correlation_report(self, correlations, timeline):
+        """Export comprehensive correlation report"""
+        report = {
+            'analysis_metadata': {
+                'timestamp': datetime.now().isoformat(),
+                'analysis_type': 'USB-Event Correlation',
+                'total_devices_analyzed': len(correlations)
+            },
+            'device_correlations': correlations,
+            'unified_timeline': timeline,
+            'summary_statistics': {
+                'devices_with_events': sum(1 for c in correlations if c['matching_events']),
+                'total_correlated_events': sum(len(c['matching_events']) for c in correlations),
+                'average_confidence': sum(c['correlation_confidence'] for c in correlations) / len(correlations) if correlations else 0
+            }
+        }
+        
+        with open('usb_event_correlation_report.json', 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        print(f"\nCorrelation report exported to: usb_event_correlation_report.json")
+        print(f"Summary Statistics:")
+        print(f"  - Devices with matching events: {report['summary_statistics']['devices_with_events']}")
+        print(f"  - Total correlated events: {report['summary_statistics']['total_correlated_events']}")
+        print(f"  - Average confidence score: {report['summary_statistics']['average_confidence']:.2f}")
+
+if __name__ == "__main__":
+    correlator = USBEventCorrelator()
+    
+    # Load data
+    usb_data = correlator.load_usb_data('usb_analysis_results.json')
+    event_data = correlator.load_event_logs('mock_event_logs.json')
+    
+    if usb_data and event_data:
+        # Perform correlation
+        correlations = correlator.correlate_usb_events(usb_data, event_data)
+        timeline = correlator.generate_correlation_timeline(correlations)
+        
+        # Display and export results
+        correlator.display_correlation_results(correlations)
+        correlator.export_correlation_report(correlations, timeline)
+    else:
+        print("Failed to load required data files")
+EOF
+
+# Run correlation analysis
+python3 usb_event_correlator.py
+Subtask 3.3: Generate Final Forensic Summary
+cat > generate_final_report.py << 'EOF'
+#!/usr/bin/env python3
+import json
+from datetime import datetime
+
+def generate_final_forensic_summary():
+    """Generate comprehensive final forensic summary"""
+    
+    try:
+        # Load all analysis results
+        with open('usb_analysis_results.json', 'r') as f:
+            usb_data = json.load(f)
+        
+        with open('usb_forensic_report.json', 'r') as f:
+            forensic_data = json.load(f)
+        
+        with open('usb_event_correlation_report.json', 'r') as f:
+            correlation_data = json.load(f)
+        
+        # Generate final summary
+        final_report = {
+            'investigation_summary': {
+                'case_id': f"USB_FORENSICS_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                'investigation_date': datetime.now().isoformat(),
+                'analyst': 'Forensic Lab Student',
+                'evidence_sources': ['SYSTEM Registry Hive', 'SOFTWARE Registry Hive', 'Windows Event Logs']
+            },
+            'key_findings': {
+                'total_usb_devices': len(usb_data['devices']),
+                'unique_vendors': len(forensic_data['connection_patterns']['unique_vendors']),
+                'devices_with_event_correlation': correlation_data['summary_statistics']['devices_with_events'],
+                'risk_assessment': forensic_data['forensic_indicators']['potential_data_exfiltration_risk']
+            },
+            'device_inventory': usb_data['devices'],
+            'timeline_analysis': correlation_data['unified_timeline'],
+            'recommendations': [
+                'Monitor USB device usage policies',
+                'Implement device whitelisting if high-risk devices detected',
+                'Regular audit of USB device connections',
+                'Consider DLP solutions for sensitive environments'
+            ]
+        }
+        
+        # Save final report
+        with open('FINAL_USB_FORENSIC_INVESTIGATION.json', 'w') as f:
+            json.dump(final_report, f, indent=2)
+        
+        # Display executive summary
+        print("\n" + "="*80)
+        print("FINAL USB DEVICE FORENSIC INVESTIGATION SUMMARY")
+        print("="*80)
+        print(f"Case ID: {final_report['investigation_summary']['case_id']}")
+        print(f"Investigation Date: {final_report['investigation_summary']['investigation_date']}")
+        print(f"Evidence Sources: {', '.join(final_report['investigation_summary']['evidence_sources'])}")
+        print("\nKEY FINDINGS:")
+        print(f"  • Total USB Devices Identified: {final_report['key_findings']['total_usb_devices']}")
+        print(f"  • Unique Vendors: {final_report['key_findings']['unique_vendors']}")
+        print(f"  • Devices with Event Correlation: {final_report['key_findings']['devices_with_event_correlation']}")
+        print(f"  • Risk Assessment: {final_report['key_findings']['risk_assessment']}")
+        
+        print("\nDEVICE INVENTORY:")
+        for i, device in enumerate(final_report['device_inventory'], 1):
+            print(f"  {i}. {device['vendor_name']} - Serial: {device['serial_number']}")
+        
+        print("\nRECOMMENDATIONS:")
+        for i, rec in enumerate(final_report['recommendations'], 1):
+            print(f"  {i}. {rec}")
+        
+        print(f"\nFinal investigation report saved to: FINAL_USB_FORENSIC_INVESTIGATION.json")
+        print("="*80)
+        
+    except Exception as e:
+        print(f"Error generating final report: {e}")
+
+if __name__ == "__main__":
+    generate_final_forensic_summary()
+EOF
+
+# Generate final forensic summary
+python3 generate_final_report.py
+Verification and Results
+View All Generated Files
+# List all generated files
+echo "Generated forensic analysis files:"
+ls -la *.json *.txt *.py
+
+# Display file sizes and creation times
+echo -e "\nFile details:"
+ls -lh *.json
+Verify Analysis Results
+# Quick verification of key results
+echo "=== USB DEVICES FOUND ==="
+grep -A 2 "vendor_name" usb_analysis_results.json | head -10
+
+echo -e "\n=== CORRELATION CONFIDENCE ==="
+grep "correlation_confidence" usb_event_correlation_report.json
+
+echo -e "\n=== RISK ASSESSMENT ==="
+grep "potential_data_exfiltration_risk" usb_forensic_report.json
+Conclusion
+In this lab, you successfully completed a comprehensive USB device forensic analysis by:
+
+Technical Accomplishments:
+
+Installed and configured open-source forensic tools on Linux
+Parsed Windows registry hive data to extract USB device information
+Correlated USB registry data with Windows event logs
+Generated forensic signatures and device timelines
+Created comprehensive investigation reports
+Forensic Skills Developed:
+
+Registry Analysis: Extracted USB device metadata from SYSTEM and SOFTWARE hives
+Event Correlation: Matched registry data with system event logs for timeline reconstruction
+Pattern Analysis: Identified connection patterns and potential security risks
+Report Generation: Created professional forensic investigation documentation
+Real-World Applications: This lab simulates actual digital forensic investigations where analysts must track USB device usage for incident response, data breach investigations, or compliance auditing. The techniques learned are directly applicable to enterprise security monitoring and forensic case work.
+
+The generated reports and analysis files demonstrate your ability to conduct thorough USB device forensics using only open-source tools, making this approach cost-effective and accessible for various investigation scenarios.
