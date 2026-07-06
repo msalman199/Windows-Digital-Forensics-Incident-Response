@@ -1,0 +1,17 @@
+Registry Explorer Analysis Notes:
+================================
+
+1. Load SYSTEM.hiv:
+   - Navigate to ControlSet001\Services
+   - Document running services
+   
+2. Load SOFTWARE.hiv:
+   - Check Microsoft\Windows\CurrentVersion\Uninstall
+   - Document installed software
+   
+3. Load NTUSER.DAT:
+   - Examine Software\Microsoft\Windows\CurrentVersion\Explorer
+   - Document user activity
+
+Key Findings:
+- [Add your findings here]
