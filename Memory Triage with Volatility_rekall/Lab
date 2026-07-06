@@ -1,0 +1,137 @@
+Memory Triage with Volatility/rekall
+Learning Objectives
+By completing this lab, you will:
+
+Install and configure Volatility framework for memory analysis
+Capture memory dumps from a running Linux system
+Analyze memory dumps to identify running processes and system artifacts
+Extract volatile data that could be lost during system shutdown
+Understand the importance of memory forensics in incident response
+Prerequisites
+Basic Linux command-line knowledge
+Understanding of operating system processes and memory management
+Familiarity with file system navigation
+Root/sudo access on the Linux machine
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux environment. The provided machine is bare metal with no pre-installed forensic tools, so you will install all required tools during the lab exercises.
+
+Task 1: Environment Setup and Tool Installation
+Subtask 1.1: Update System and Install Dependencies
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y python3 python3-pip git build-essential python3-dev libssl-dev
+Subtask 1.2: Install Volatility Framework
+# Install Volatility 3 (latest version)
+pip3 install volatility3
+
+# Verify installation
+vol -h
+Subtask 1.3: Install Memory Capture Tools
+# Install LiME (Linux Memory Extractor)
+sudo apt install -y linux-headers-$(uname -r)
+git clone https://github.com/504ensicsLabs/LiME.git
+cd LiME/src
+make
+cd ~/
+Task 2: Memory Dump Capture
+Subtask 2.1: Create Memory Dump Directory
+mkdir ~/memory_analysis
+cd ~/memory_analysis
+Subtask 2.2: Capture Memory Dump Using LiME
+# Load LiME kernel module and capture memory
+sudo insmod ~/LiME/src/lime-$(uname -r).ko "path=./memory_dump.lime format=lime"
+
+# Verify dump creation
+ls -lh memory_dump.lime
+Subtask 2.3: Alternative Memory Capture Method
+# If LiME fails, use dd method (less reliable but functional)
+sudo dd if=/dev/mem of=./memory_dump_dd.raw bs=1M count=1024 2>/dev/null
+Task 3: Memory Analysis with Volatility
+Subtask 3.1: Identify Memory Profile
+# For Linux memory dumps, identify the system profile
+vol -f memory_dump.lime linux.banner
+vol -f memory_dump.lime linux.info
+Subtask 3.2: Process Analysis
+# List running processes
+vol -f memory_dump.lime linux.pslist
+
+# Show process tree
+vol -f memory_dump.lime linux.pstree
+
+# Find hidden processes
+vol -f memory_dump.lime linux.psaux
+Subtask 3.3: Network Connections Analysis
+# Display network connections
+vol -f memory_dump.lime linux.netstat
+
+# Show listening sockets
+vol -f memory_dump.lime linux.lsof
+Subtask 3.4: File System Analysis
+# List mounted filesystems
+vol -f memory_dump.lime linux.mount
+
+# Show open files
+vol -f memory_dump.lime linux.lsof | head -20
+Subtask 3.5: Extract Process Memory
+# Dump specific process memory (replace PID with actual process ID)
+vol -f memory_dump.lime -o ./extracted/ linux.proc.Maps --pid 1234
+
+# Extract bash history from memory
+vol -f memory_dump.lime linux.bash
+Task 4: Advanced Memory Artifacts
+Subtask 4.1: Kernel Module Analysis
+# List loaded kernel modules
+vol -f memory_dump.lime linux.lsmod
+
+# Check for suspicious modules
+vol -f memory_dump.lime linux.check_modules
+Subtask 4.2: System Call Analysis
+# Examine system call table
+vol -f memory_dump.lime linux.check_syscall
+
+# Look for process command lines
+vol -f memory_dump.lime linux.psaux | grep -E "(bash|sh|python|perl)"
+Subtask 4.3: Memory Strings Analysis
+# Extract strings from memory dump
+strings memory_dump.lime | grep -E "(password|user|admin|root)" | head -10
+
+# Look for IP addresses in memory
+strings memory_dump.lime | grep -E "([0-9]{1,3}\.){3}[0-9]{1,3}" | head -10
+Task 5: Documentation and Reporting
+Subtask 5.1: Create Analysis Report
+# Generate comprehensive report
+echo "Memory Forensics Analysis Report" > analysis_report.txt
+echo "=================================" >> analysis_report.txt
+echo "Date: $(date)" >> analysis_report.txt
+echo "" >> analysis_report.txt
+
+# Add process information
+echo "Running Processes:" >> analysis_report.txt
+vol -f memory_dump.lime linux.pslist >> analysis_report.txt
+
+# Add network connections
+echo -e "\nNetwork Connections:" >> analysis_report.txt
+vol -f memory_dump.lime linux.netstat >> analysis_report.txt
+Subtask 5.2: Verify Analysis Results
+# Check report size and content
+wc -l analysis_report.txt
+head -20 analysis_report.txt
+Verification Steps
+Confirm memory dump creation: ls -lh memory_dump.lime
+Verify Volatility installation: vol --help
+Check analysis output: cat analysis_report.txt | wc -l
+Validate extracted data: Review process lists and network connections
+Common Issues and Solutions
+LiME compilation errors: Ensure kernel headers match running kernel version
+Permission denied: Use sudo for memory access operations
+Large memory dumps: Use head or tail commands to view partial outputs
+Missing profiles: Volatility 3 auto-detects Linux profiles
+Cleanup
+# Remove kernel module
+sudo rmmod lime
+
+# Clean up large files if needed
+rm -f memory_dump.lime memory_dump_dd.raw
+Conclusion
+You have successfully completed memory forensics analysis using Volatility framework. This lab demonstrated how to capture volatile system memory and extract critical forensic artifacts including running processes, network connections, and system information. Memory analysis is crucial in incident response as it captures data that would be lost when a system is powered down, providing investigators with real-time system state information that can reveal malicious activities, hidden processes, and network communications.
+
+These skills are essential for cybersecurity professionals, digital forensics investigators, and incident response teams who need to analyze compromised systems and understand attacker behavior through memory artifacts.
