@@ -1,0 +1,214 @@
+Analyze Deleted Files with Sleuth Kit/Autopsy
+Objectives
+By completing this lab, you will:
+
+Install and configure Sleuth Kit and Autopsy on Linux
+Create forensic disk images for analysis
+Use Sleuth Kit command-line tools to locate and recover deleted files
+Analyze deleted files using Autopsy's graphical interface
+Cross-reference findings between both tools
+Document forensic evidence of deleted file recovery
+Prerequisites
+Basic Linux command-line knowledge
+Understanding of file systems (ext4, NTFS)
+Familiarity with forensic investigation concepts
+Root/sudo access on the Linux machine
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux environment. The provided machine is bare metal with no pre-installed forensic tools, so you will install all required software during the lab.
+
+Task 1: Environment Setup and Tool Installation
+Subtask 1.1: Update System and Install Dependencies
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y build-essential git wget curl unzip default-jdk
+Subtask 1.2: Install Sleuth Kit
+sudo apt install -y sleuthkit
+tsk_version
+Subtask 1.3: Install Autopsy
+wget https://github.com/sleuthkit/autopsy/releases/download/autopsy-4.20.0/autopsy-4.20.0.zip
+unzip autopsy-4.20.0.zip
+cd autopsy-4.20.0
+sudo ./unix_setup.sh
+Subtask 1.4: Create Test Environment
+# Create a test disk image with files to delete
+dd if=/dev/zero of=test_disk.img bs=1M count=100
+mkfs.ext4 test_disk.img
+
+# Mount the image
+sudo mkdir /mnt/test_disk
+sudo mount -o loop test_disk.img /mnt/test_disk
+
+# Create test files
+sudo mkdir /mnt/test_disk/documents
+sudo echo "This is a confidential document" > /tmp/secret.txt
+sudo echo "Financial records for 2024" > /tmp/finance.txt
+sudo echo "Employee database backup" > /tmp/employees.txt
+sudo cp /tmp/*.txt /mnt/test_disk/documents/
+
+# Create additional files in root
+sudo echo "System configuration backup" > /mnt/test_disk/config.bak
+sudo echo "Important project notes" > /mnt/test_disk/notes.txt
+
+# Unmount to simulate real scenario
+sudo umount /mnt/test_disk
+Task 2: Use Sleuth Kit to Locate and Analyze Deleted Files
+Subtask 2.1: Mount and Delete Files
+# Remount the disk
+sudo mount -o loop test_disk.img /mnt/test_disk
+
+# Delete some files
+sudo rm /mnt/test_disk/documents/secret.txt
+sudo rm /mnt/test_disk/config.bak
+sudo rm /mnt/test_disk/notes.txt
+
+# Empty trash and sync
+sudo sync
+sudo umount /mnt/test_disk
+Subtask 2.2: Analyze File System Structure
+# Display file system information
+fsstat test_disk.img
+
+# List all inodes (including deleted)
+ils test_disk.img
+
+# Show detailed inode information
+istat test_disk.img 12
+Subtask 2.3: Recover Deleted Files with Sleuth Kit
+# Create recovery directory
+mkdir recovered_files
+
+# List deleted files
+fls -d test_disk.img
+
+# Recover deleted files by inode
+icat test_disk.img 12 > recovered_files/recovered_secret.txt
+icat test_disk.img 13 > recovered_files/recovered_config.bak
+
+# Verify recovered content
+cat recovered_files/recovered_secret.txt
+cat recovered_files/recovered_config.bak
+Subtask 2.4: Search for File Signatures
+# Search for specific file patterns
+sigfind -t fat test_disk.img
+blkls test_disk.img | strings | grep -i "confidential"
+Task 3: Cross-reference Results with Autopsy
+Subtask 3.1: Start Autopsy Server
+cd autopsy-4.20.0
+sudo ./bin/autopsy &
+Open web browser and navigate to: http://localhost:9999/autopsy
+
+Subtask 3.2: Create New Case in Autopsy
+Click New Case
+Enter case details:
+Case Name: Deleted_Files_Analysis
+Description: Lab 4 - Deleted File Recovery
+Investigator: Student
+Click New Case
+Subtask 3.3: Add Evidence Source
+Click Add Host
+Host Name: test_system
+Click Add Host
+Click Add Image
+Location: Browse to your test_disk.img file
+Type: Disk
+Import Method: Copy
+Click Next and Add
+Subtask 3.4: Analyze Deleted Files in Autopsy
+Navigate to File Analysis → File Activity Time Lines
+Click Generate
+Review the timeline for deleted file activities
+Navigate to Keyword Search
+Search for: confidential
+Review results and compare with Sleuth Kit findings
+Subtask 3.5: Extract Deleted Files via Autopsy
+Go to File Analysis → File Search
+Check Show only deleted files
+Click Search
+Right-click on deleted files
+Select Extract File(s)
+Save to autopsy_recovered/ directory
+Task 4: Compare and Document Results
+Subtask 4.1: Compare Recovery Results
+# Compare files recovered by both tools
+ls -la recovered_files/
+ls -la autopsy_recovered/
+
+# Compare file contents
+diff recovered_files/recovered_secret.txt autopsy_recovered/secret.txt
+Subtask 4.2: Generate Analysis Report
+# Create comprehensive report
+cat > analysis_report.txt << EOF
+DELETED FILE ANALYSIS REPORT
+============================
+
+Case: Lab 4 - Deleted File Recovery
+Date: $(date)
+Analyst: Student
+
+SLEUTH KIT FINDINGS:
+- Total deleted inodes found: $(ils test_disk.img | wc -l)
+- Successfully recovered files: $(ls recovered_files/ | wc -l)
+- File signatures detected: $(sigfind -t fat test_disk.img | wc -l)
+
+AUTOPSY FINDINGS:
+- Deleted files identified: $(ls autopsy_recovered/ | wc -l)
+- Timeline entries: Generated successfully
+- Keyword matches: Found in deleted content
+
+CROSS-REFERENCE RESULTS:
+- Both tools successfully identified deleted files
+- Content integrity verified through diff comparison
+- Autopsy provided enhanced visualization and reporting
+
+CONCLUSION:
+Both Sleuth Kit and Autopsy effectively recovered deleted files.
+Sleuth Kit offers precise command-line control while Autopsy
+provides comprehensive GUI-based analysis and reporting.
+EOF
+
+cat analysis_report.txt
+Verification and Testing
+Verify Tool Installation
+# Confirm Sleuth Kit installation
+which fls && which icat && which ils
+
+# Test Autopsy accessibility
+curl -s http://localhost:9999/autopsy | grep -i autopsy
+Validate Recovery Success
+# Confirm file recovery
+file recovered_files/*
+wc -l recovered_files/*
+
+# Verify content integrity
+grep -i "confidential" recovered_files/recovered_secret.txt
+Troubleshooting
+Issue: Autopsy web interface not accessible Solution:
+
+sudo netstat -tlnp | grep 9999
+sudo ufw allow 9999
+Issue: Permission denied during file recovery Solution:
+
+sudo chown $USER:$USER recovered_files/
+chmod 755 recovered_files/
+Issue: Disk image mounting fails Solution:
+
+sudo losetup -d /dev/loop0
+sudo umount /mnt/test_disk 2>/dev/null
+Cleanup
+# Stop Autopsy
+sudo pkill -f autopsy
+
+# Clean up files
+sudo umount /mnt/test_disk 2>/dev/null
+rm -rf test_disk.img recovered_files/ autopsy_recovered/
+rm -rf autopsy-4.20.0/ autopsy-4.20.0.zip
+Conclusion
+You have successfully completed deleted file analysis using both Sleuth Kit and Autopsy. This lab demonstrated how command-line forensic tools like Sleuth Kit provide precise control over file recovery operations, while GUI-based tools like Autopsy offer comprehensive analysis workflows and enhanced visualization capabilities.
+
+Key accomplishments include:
+
+Installing and configuring professional forensic tools
+Creating realistic test scenarios with deleted files
+Recovering deleted files using multiple methodologies
+Cross-referencing results between different forensic platforms
+Documenting findings in a professional forensic report
+These skills are essential for digital forensics investigations, incident response, and data recovery operations in cybersecurity environments.
