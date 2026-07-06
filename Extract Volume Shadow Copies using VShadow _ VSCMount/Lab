@@ -1,0 +1,220 @@
+ Extract Volume Shadow Copies using VShadow & VSCMount
+Learning Objectives
+By completing this lab, you will:
+
+Understand Volume Shadow Copy (VSC) technology and its forensic applications
+Install and configure VShadow and VSCMount tools on Linux
+Extract Volume Shadow Copies from Windows disk images
+Mount VSCs to recover deleted files and analyze historical data
+Perform timeline analysis using shadow copy timestamps
+Prerequisites
+Basic Linux command-line knowledge
+Understanding of file systems and disk imaging concepts
+Familiarity with forensic investigation principles
+Knowledge of Windows file system structure
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required tools during the lab exercises.
+
+Task 1: Install Required Tools and Prepare Environment
+Subtask 1.1: Update System and Install Dependencies
+# Update package repositories
+sudo apt update && sudo apt upgrade -y
+
+# Install essential dependencies
+sudo apt install -y build-essential git cmake libfuse-dev pkg-config autotools-dev autoconf libtool
+
+# Install additional forensic tools
+sudo apt install -y sleuthkit autopsy ewf-tools
+Subtask 1.2: Install libvshadow (VShadow functionality)
+# Clone libvshadow repository
+cd /opt
+sudo git clone https://github.com/libyal/libvshadow.git
+cd libvshadow
+
+# Build and install libvshadow
+sudo ./synclibs.sh
+sudo ./autogen.sh
+sudo ./configure
+sudo make
+sudo make install
+sudo ldconfig
+Subtask 1.3: Install libvslvm for LVM support
+# Clone and build libvslvm
+cd /opt
+sudo git clone https://github.com/libyal/libvslvm.git
+cd libvslvm
+
+sudo ./synclibs.sh
+sudo ./autogen.sh
+sudo ./configure
+sudo make
+sudo make install
+sudo ldconfig
+Subtask 1.4: Create Sample Windows Disk Image
+# Create working directory
+mkdir -p ~/vsc_lab
+cd ~/vsc_lab
+
+# Create a sample NTFS image with shadow copies (simulation)
+dd if=/dev/zero of=windows_disk.img bs=1M count=500
+
+# Format as NTFS (requires ntfs-3g)
+sudo apt install -y ntfs-3g
+sudo mkfs.ntfs -F windows_disk.img
+
+# Create mount point and mount image
+mkdir -p ~/vsc_lab/mount_point
+sudo mount -o loop windows_disk.img ~/vsc_lab/mount_point
+
+# Create sample files and directories
+sudo mkdir -p ~/vsc_lab/mount_point/Users/TestUser/Documents
+sudo echo "Original document content" | sudo tee ~/vsc_lab/mount_point/Users/TestUser/Documents/important.txt
+sudo echo "Sensitive data file" | sudo tee ~/vsc_lab/mount_point/Users/TestUser/Documents/confidential.doc
+
+# Unmount for shadow copy simulation
+sudo umount ~/vsc_lab/mount_point
+Task 2: Extract Volume Shadow Copies using VShadow
+Subtask 2.1: Analyze Disk Image for Shadow Copies
+# Use vshadowinfo to examine shadow copies
+vshadowinfo ~/vsc_lab/windows_disk.img
+
+# List available shadow copies with detailed information
+vshadowinfo -v ~/vsc_lab/windows_disk.img > shadow_analysis.txt
+cat shadow_analysis.txt
+Subtask 2.2: Extract Shadow Copy Information
+# Create output directory for extracted data
+mkdir -p ~/vsc_lab/extracted_shadows
+
+# Use vshadowmount to mount shadow copies
+mkdir -p ~/vsc_lab/vsc_mount
+vshadowmount ~/vsc_lab/windows_disk.img ~/vsc_lab/vsc_mount
+
+# List mounted shadow copies
+ls -la ~/vsc_lab/vsc_mount/
+Subtask 2.3: Export Specific Shadow Copies
+# Export first shadow copy to separate file
+vshadowexport -t ~/vsc_lab/extracted_shadows ~/vsc_lab/windows_disk.img
+
+# Verify exported shadow copies
+ls -la ~/vsc_lab/extracted_shadows/
+Task 3: Mount VSCs and Recover Deleted Files
+Subtask 3.1: Mount Individual Shadow Copies
+# Create mount points for each shadow copy
+mkdir -p ~/vsc_lab/shadow_mounts/vsc1
+mkdir -p ~/vsc_lab/shadow_mounts/vsc2
+
+# Mount first shadow copy (if available)
+if [ -f ~/vsc_lab/extracted_shadows/vsc1 ]; then
+    sudo mount -o loop,ro ~/vsc_lab/extracted_shadows/vsc1 ~/vsc_lab/shadow_mounts/vsc1
+fi
+Subtask 3.2: Analyze Shadow Copy Contents
+# Explore shadow copy file structure
+find ~/vsc_lab/shadow_mounts/vsc1 -type f -name "*.txt" -o -name "*.doc" 2>/dev/null
+
+# Create file listing with timestamps
+find ~/vsc_lab/shadow_mounts/vsc1 -type f -exec ls -la {} \; > ~/vsc_lab/shadow_file_list.txt
+
+# Search for specific file patterns
+grep -r "important\|confidential\|sensitive" ~/vsc_lab/shadow_mounts/vsc1/ 2>/dev/null
+Subtask 3.3: Recover Deleted Files
+# Create recovery directory
+mkdir -p ~/vsc_lab/recovered_files
+
+# Copy files from shadow copies
+if [ -d ~/vsc_lab/shadow_mounts/vsc1/Users ]; then
+    cp -r ~/vsc_lab/shadow_mounts/vsc1/Users ~/vsc_lab/recovered_files/shadow1_users
+fi
+
+# Use fls from Sleuth Kit for detailed file analysis
+fls -r ~/vsc_lab/windows_disk.img > ~/vsc_lab/file_system_analysis.txt
+
+# Search for deleted files
+grep "(deleted)" ~/vsc_lab/file_system_analysis.txt
+Subtask 3.4: Compare Shadow Copy Versions
+# Create comparison script
+cat > ~/vsc_lab/compare_shadows.sh << 'EOF'
+#!/bin/bash
+
+echo "=== Shadow Copy Comparison Report ==="
+echo "Generated: $(date)"
+echo
+
+# Compare file counts between shadow copies
+if [ -d ~/vsc_lab/shadow_mounts/vsc1 ] && [ -d ~/vsc_lab/shadow_mounts/vsc2 ]; then
+    echo "File count in VSC1: $(find ~/vsc_lab/shadow_mounts/vsc1 -type f | wc -l)"
+    echo "File count in VSC2: $(find ~/vsc_lab/shadow_mounts/vsc2 -type f | wc -l)"
+fi
+
+# List unique files in each shadow copy
+echo -e "\n=== Files unique to each shadow copy ==="
+if [ -d ~/vsc_lab/shadow_mounts/vsc1 ]; then
+    find ~/vsc_lab/shadow_mounts/vsc1 -type f > /tmp/vsc1_files.txt
+fi
+if [ -d ~/vsc_lab/shadow_mounts/vsc2 ]; then
+    find ~/vsc_lab/shadow_mounts/vsc2 -type f > /tmp/vsc2_files.txt
+fi
+
+EOF
+
+chmod +x ~/vsc_lab/compare_shadows.sh
+./~/vsc_lab/compare_shadows.sh
+Task 4: Timeline Analysis and Documentation
+Subtask 4.1: Create Timeline from Shadow Copies
+# Generate timeline using mactime
+if command -v mactime &> /dev/null; then
+    fls -m / -r ~/vsc_lab/windows_disk.img > ~/vsc_lab/bodyfile.txt
+    mactime -b ~/vsc_lab/bodyfile.txt > ~/vsc_lab/timeline.txt
+    head -20 ~/vsc_lab/timeline.txt
+fi
+Subtask 4.2: Generate Investigation Report
+# Create comprehensive report
+cat > ~/vsc_lab/vsc_investigation_report.txt << EOF
+Volume Shadow Copy Investigation Report
+======================================
+Investigation Date: $(date)
+Analyst: Lab Student
+Image File: windows_disk.img
+
+SUMMARY OF FINDINGS:
+- Total shadow copies found: $(ls ~/vsc_lab/extracted_shadows/ 2>/dev/null | wc -l)
+- Files recovered: $(find ~/vsc_lab/recovered_files -type f 2>/dev/null | wc -l)
+- Analysis completed: $(date)
+
+SHADOW COPY DETAILS:
+$(cat ~/vsc_lab/shadow_analysis.txt 2>/dev/null | head -20)
+
+RECOVERED FILES:
+$(find ~/vsc_lab/recovered_files -type f -exec ls -la {} \; 2>/dev/null)
+
+EOF
+
+echo "Investigation report created: ~/vsc_lab/vsc_investigation_report.txt"
+Subtask 4.3: Cleanup and Verification
+# Verify all recovered data
+echo "=== Lab Completion Verification ==="
+echo "1. Shadow copies extracted: $(ls ~/vsc_lab/extracted_shadows/ 2>/dev/null | wc -l)"
+echo "2. Files recovered: $(find ~/vsc_lab/recovered_files -type f 2>/dev/null | wc -l)"
+echo "3. Report generated: $([ -f ~/vsc_lab/vsc_investigation_report.txt ] && echo "Yes" || echo "No")"
+
+# Unmount all mounted filesystems
+sudo umount ~/vsc_lab/shadow_mounts/vsc1 2>/dev/null
+sudo umount ~/vsc_lab/shadow_mounts/vsc2 2>/dev/null
+sudo umount ~/vsc_lab/vsc_mount 2>/dev/null
+
+echo "Lab completed successfully!"
+Troubleshooting Common Issues
+Issue: vshadowinfo command not found Solution: Ensure libvshadow is properly installed and ldconfig was run
+
+Issue: Permission denied when mounting Solution: Use sudo for mount operations and check file permissions
+
+Issue: No shadow copies found Solution: Verify the disk image contains NTFS filesystem with VSC data
+
+Conclusion
+You have successfully completed Volume Shadow Copy extraction and analysis using open-source tools. This lab demonstrated how to:
+
+Install and configure VShadow tools on Linux
+Extract Volume Shadow Copies from Windows disk images
+Mount and analyze shadow copy contents
+Recover deleted files from historical snapshots
+Generate forensic reports with timeline analysis
+These skills are essential for digital forensics investigations, incident response, and data recovery scenarios. Volume Shadow Copies provide valuable historical data that can reveal file modifications, deletions, and system changes over time, making them crucial evidence sources in forensic examinations.
