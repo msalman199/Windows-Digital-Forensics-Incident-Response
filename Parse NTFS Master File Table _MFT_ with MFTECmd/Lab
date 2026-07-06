@@ -1,0 +1,154 @@
+Parse NTFS Master File Table (MFT) with MFTECmd
+Learning Objectives
+By completing this lab, you will:
+
+Extract and parse NTFS Master File Table (MFT) data using MFTECmd
+Analyze file records, metadata, and timestamps within the MFT
+Understand the forensic significance of MFT artifacts
+Interpret MFT output for digital forensics investigations
+Prerequisites
+Basic understanding of file systems and NTFS structure
+Familiarity with Linux command line operations
+Knowledge of digital forensics concepts
+Understanding of CSV data analysis
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required tools during the lab exercises.
+
+Task 1: Extract MFT Data Using MFTECmd
+Subtask 1.1: Install Required Tools
+Install MFTECmd and dependencies:
+
+# Update system packages
+sudo apt update && sudo apt upgrade -y
+
+# Install .NET runtime for MFTECmd
+wget https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb
+sudo apt update
+sudo apt install -y dotnet-runtime-6.0
+
+# Download MFTECmd
+wget https://download.sysinternals.com/files/MFTECmd.zip
+sudo apt install -y unzip
+unzip MFTECmd.zip -d /opt/MFTECmd/
+sudo chmod +x /opt/MFTECmd/MFTECmd.exe
+Subtask 1.2: Create Sample NTFS Image
+Create a sample NTFS filesystem for analysis:
+
+# Create a sample disk image
+dd if=/dev/zero of=sample_ntfs.img bs=1M count=100
+
+# Format as NTFS
+sudo apt install -y ntfs-3g
+sudo mkfs.ntfs -f sample_ntfs.img
+
+# Mount the image
+mkdir /tmp/ntfs_mount
+sudo mount -o loop sample_ntfs.img /tmp/ntfs_mount
+
+# Create sample files with different timestamps
+sudo touch /tmp/ntfs_mount/file1.txt
+sudo touch /tmp/ntfs_mount/file2.doc
+echo "Sample content" | sudo tee /tmp/ntfs_mount/document.txt
+sudo mkdir /tmp/ntfs_mount/folder1
+
+# Unmount to preserve MFT
+sudo umount /tmp/ntfs_mount
+Subtask 1.3: Extract MFT from Image
+Extract the MFT using dd command:
+
+# Calculate MFT location (typically starts at sector 786432 for small volumes)
+# For this lab, we'll extract the first few MB which contains MFT
+dd if=sample_ntfs.img of=extracted_mft.bin bs=512 skip=0 count=2048
+
+# Verify MFT signature
+hexdump -C extracted_mft.bin | head -5
+Task 2: Analyze File Records and Timestamps in MFT
+Subtask 2.1: Parse MFT with MFTECmd
+Run MFTECmd to parse the extracted MFT:
+
+# Parse MFT and output to CSV
+dotnet /opt/MFTECmd/MFTECmd.exe -f extracted_mft.bin --csv /tmp/mft_output --csvf mft_analysis.csv
+
+# Alternative: Parse with detailed output
+dotnet /opt/MFTECmd/MFTECmd.exe -f extracted_mft.bin --csv /tmp/mft_output --csvf detailed_mft.csv -v
+Subtask 2.2: Analyze MFT Records
+Examine the parsed MFT data:
+
+# View CSV headers
+head -1 /tmp/mft_output/mft_analysis.csv
+
+# Count total records
+wc -l /tmp/mft_output/mft_analysis.csv
+
+# View first 10 file records
+head -10 /tmp/mft_output/mft_analysis.csv | column -t -s ','
+Subtask 2.3: Extract Timestamp Information
+Analyze timestamps and file metadata:
+
+# Install CSV analysis tools
+sudo apt install -y csvkit
+
+# Extract files with specific extensions
+csvgrep -c "Extension" -m ".txt" /tmp/mft_output/mft_analysis.csv
+
+# Sort by creation time
+csvsort -c "Created0x10" /tmp/mft_output/mft_analysis.csv | head -10
+
+# Find deleted files (if any)
+csvgrep -c "InUse" -m "False" /tmp/mft_output/mft_analysis.csv
+Subtask 2.4: Generate Analysis Report
+Create a summary report of findings:
+
+# Create analysis script
+cat > mft_analysis.sh << 'EOF'
+#!/bin/bash
+echo "=== MFT Analysis Report ==="
+echo "Total MFT Records: $(wc -l < /tmp/mft_output/mft_analysis.csv)"
+echo ""
+echo "File Extensions Found:"
+csvcut -c "Extension" /tmp/mft_output/mft_analysis.csv | sort | uniq -c | sort -nr
+echo ""
+echo "Files by Size (Top 5):"
+csvsort -c "LogicalSize" -r /tmp/mft_output/mft_analysis.csv | head -6 | csvcut -c "FileName,LogicalSize"
+echo ""
+echo "Recently Created Files:"
+csvsort -c "Created0x10" -r /tmp/mft_output/mft_analysis.csv | head -6 | csvcut -c "FileName,Created0x10"
+EOF
+
+chmod +x mft_analysis.sh
+./mft_analysis.sh
+Subtask 2.5: Examine Specific MFT Attributes
+Analyze specific MFT attributes and metadata:
+
+# Look for files with multiple data streams
+csvgrep -c "HasAds" -m "True" /tmp/mft_output/mft_analysis.csv
+
+# Find system files
+csvgrep -c "FileName" -r "^\$" /tmp/mft_output/mft_analysis.csv | csvcut -c "FileName,EntryNumber"
+
+# Check for resident vs non-resident files
+csvstat -c "IsResident" /tmp/mft_output/mft_analysis.csv
+Verification and Testing
+Verify your analysis results:
+
+# Validate CSV structure
+csvclean /tmp/mft_output/mft_analysis.csv
+
+# Generate statistics
+csvstat /tmp/mft_output/mft_analysis.csv
+
+# Create timeline of file activities
+csvsort -c "Created0x10" /tmp/mft_output/mft_analysis.csv | csvcut -c "FileName,Created0x10,Modified0x10" > timeline.csv
+head -10 timeline.csv
+Common Issues and Troubleshooting
+MFTECmd not executing: Ensure .NET runtime is properly installed and MFTECmd has execute permissions.
+
+Empty CSV output: Verify the MFT file contains valid NTFS data using hexdump.
+
+Permission errors: Use sudo when accessing raw disk images or system files.
+
+Conclusion
+You have successfully extracted and analyzed NTFS Master File Table data using MFTECmd. This lab demonstrated how to parse MFT records, extract file metadata, analyze timestamps, and generate forensic reports. Understanding MFT analysis is crucial for digital forensics investigations as it provides detailed information about file system activities, including deleted files, file creation patterns, and system metadata that may not be visible through normal file system access.
+
+The skills learned in this lab are essential for forensic analysts investigating file system artifacts and understanding the complete picture of file system activities on NTFS volumes.
