@@ -1,0 +1,15 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run]
+"SecurityUpdate"="C:\\Windows\\System32\\svchost.exe -k netsvcs"
+"WindowsDefender"="C:\\Program Files\\Windows Defender\\MSASCuiL.exe"
+"MaliciousApp"="C:\\Users\\Public\\malware.exe"
+"SystemCheck"="powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\\temp\\check.ps1"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce]
+"FirstRun"="C:\\Windows\\System32\\cmd.exe /c del C:\\temp\\installer.exe"
+"SuspiciousOnce"="C:\\Users\\Public\\Downloads\\update.bat"
+
+[HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Run]
+"UserApp"="C:\\Users\\user\\AppData\\Roaming\\app.exe"
+"BackdoorService"="rundll32.exe C:\\Windows\\System32\\malicious.dll,StartService"
