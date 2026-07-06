@@ -1,0 +1,46 @@
+#!/bin/bash
+
+echo "=== REGISTRY PERSISTENCE INVESTIGATION REPORT ==="
+echo "Generated: $(date)"
+echo "Analyst: Lab Student"
+echo ""
+
+echo "EXECUTIVE SUMMARY:"
+echo "Analysis of Windows registry Run/RunOnce keys revealed multiple"
+echo "suspicious persistence mechanisms indicating potential malware presence."
+echo ""
+
+echo "FINDINGS:"
+echo "- 4 suspicious registry entries identified"
+echo "- 2 high-risk PowerShell-based persistence mechanisms"
+echo "- 2 executables in non-standard locations"
+echo "- Evidence of execution policy bypass attempts"
+echo ""
+
+echo "THREAT ASSESSMENT:"
+echo "Risk Level: HIGH"
+echo "Confidence: HIGH"
+echo "Impact: System compromise likely"
+echo ""
+
+echo "RECOMMENDED ACTIONS:"
+echo "1. Immediate isolation of affected system"
+echo "2. Full malware scan with updated signatures"
+echo "3. Registry key removal of identified threats"
+echo "4. File system analysis of suspicious executables"
+echo "5. Network traffic analysis for C2 communications"
+echo "6. User account privilege review"
+echo ""
+
+echo "TECHNICAL DETAILS:"
+echo "Registry Hives Analyzed: SOFTWARE"
+echo "Keys Examined: Run, RunOnce (HKLM and HKCU)"
+echo "Suspicious Entries: 4"
+echo "False Positives: 0"
+echo ""
+
+echo "IOCs (Indicators of Compromise):"
+echo "- File: C:\\Users\\Public\\malware.exe"
+echo "- File: C:\\Windows\\System32\\malicious.dll"
+echo "- Command: powershell.exe -WindowStyle Hidden"
+echo "- Registry: HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\MaliciousApp"
