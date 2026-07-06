@@ -1,0 +1,269 @@
+ Identify Persistence Artifacts in Run/RunOnce Keys
+Learning Objectives
+By completing this lab, you will:
+
+Analyze Windows registry files for persistence artifacts in Run/RunOnce keys
+Use Registry Explorer to examine registry hives
+Identify suspicious entries that indicate malware persistence
+Understand common Windows persistence mechanisms
+Prerequisites
+Basic understanding of Windows registry structure
+Familiarity with Linux command line
+Knowledge of malware persistence concepts
+Understanding of registry key paths and values
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Click Start Lab to access your dedicated Linux machine. The provided machine is bare metal with no pre-installed tools, so you will install all required tools during the lab.
+
+Task 1: Install Required Tools and Prepare Environment
+Subtask 1.1: Install Wine and Dependencies
+sudo apt update
+sudo apt install -y wine winetricks wget unzip
+Subtask 1.2: Configure Wine Environment
+winecfg
+Select Windows 10 from the dropdown and click OK.
+
+Subtask 1.3: Download Registry Explorer
+cd ~/
+wget https://f001.backblazeb2.com/file/EricZimmermanTools/RegistryExplorer_RECmd.zip
+unzip RegistryExplorer_RECmd.zip -d RegistryExplorer
+Subtask 1.4: Create Sample Registry Files
+Create a directory for sample registry files:
+
+mkdir ~/registry_samples
+cd ~/registry_samples
+Download sample Windows registry hives:
+
+# Create a mock SOFTWARE registry hive with persistence entries
+cat > sample_software.reg << 'EOF'
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run]
+"SecurityUpdate"="C:\\Windows\\System32\\svchost.exe -k netsvcs"
+"WindowsDefender"="C:\\Program Files\\Windows Defender\\MSASCuiL.exe"
+"MaliciousApp"="C:\\Users\\Public\\malware.exe"
+"SystemCheck"="powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\\temp\\check.ps1"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce]
+"FirstRun"="C:\\Windows\\System32\\cmd.exe /c del C:\\temp\\installer.exe"
+"SuspiciousOnce"="C:\\Users\\Public\\Downloads\\update.bat"
+
+[HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Run]
+"UserApp"="C:\\Users\\user\\AppData\\Roaming\\app.exe"
+"BackdoorService"="rundll32.exe C:\\Windows\\System32\\malicious.dll,StartService"
+EOF
+Task 2: Use Registry Explorer to Locate Persistence Keys
+Subtask 2.1: Launch Registry Explorer
+cd ~/RegistryExplorer
+wine RegistryExplorer.exe
+Subtask 2.2: Load Registry File
+In Registry Explorer, click File → Load Hive
+Navigate to the sample registry file location
+Select the sample_software.reg file
+Click Open
+Subtask 2.3: Navigate to Run Keys
+Navigate to the following registry paths:
+
+HKEY_LOCAL_MACHINE persistence locations:
+
+SOFTWARE\Microsoft\Windows\CurrentVersion\Run
+SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce
+HKEY_CURRENT_USER persistence locations:
+
+SOFTWARE\Microsoft\Windows\CurrentVersion\Run
+SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce
+Subtask 2.4: Export Registry Data for Analysis
+Create a script to extract Run key information:
+
+cat > analyze_run_keys.sh << 'EOF'
+#!/bin/bash
+
+echo "=== Windows Registry Run Keys Analysis ==="
+echo "Date: $(date)"
+echo ""
+
+echo "SUSPICIOUS INDICATORS TO LOOK FOR:"
+echo "- Executables in unusual locations (temp, public folders)"
+echo "- PowerShell commands with hidden windows"
+echo "- Rundll32.exe with suspicious DLLs"
+echo "- Base64 encoded commands"
+echo "- Scripts in system directories"
+echo ""
+
+echo "=== HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run ==="
+grep -A 10 "CurrentVersion\\\\Run" ~/registry_samples/sample_software.reg | grep -E "^\".*\"="
+
+echo ""
+echo "=== HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce ==="
+grep -A 10 "CurrentVersion\\\\RunOnce" ~/registry_samples/sample_software.reg | grep -E "^\".*\"="
+
+echo ""
+echo "=== Analysis Complete ==="
+EOF
+
+chmod +x analyze_run_keys.sh
+./analyze_run_keys.sh
+Task 3: Identify Suspicious Entries
+Subtask 3.1: Analyze Registry Entries
+Create a detailed analysis script:
+
+cat > detailed_analysis.sh << 'EOF'
+#!/bin/bash
+
+echo "=== DETAILED PERSISTENCE ANALYSIS ==="
+echo ""
+
+echo "LEGITIMATE ENTRIES (Typical):"
+echo "- Windows Defender: MSASCuiL.exe"
+echo "- System services: svchost.exe with proper parameters"
+echo ""
+
+echo "SUSPICIOUS ENTRIES IDENTIFIED:"
+echo ""
+
+echo "1. SUSPICIOUS: MaliciousApp"
+echo "   Path: C:\\Users\\Public\\malware.exe"
+echo "   Risk: HIGH - Executable in Public folder"
+echo "   Reason: Public folders are commonly used by malware"
+echo ""
+
+echo "2. SUSPICIOUS: SystemCheck"
+echo "   Command: powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass"
+echo "   Risk: HIGH - Hidden PowerShell execution"
+echo "   Reason: Bypasses execution policy, runs hidden"
+echo ""
+
+echo "3. SUSPICIOUS: SuspiciousOnce"
+echo "   Path: C:\\Users\\Public\\Downloads\\update.bat"
+echo "   Risk: MEDIUM - Batch file in Downloads"
+echo "   Reason: Unusual location for system updates"
+echo ""
+
+echo "4. SUSPICIOUS: BackdoorService"
+echo "   Command: rundll32.exe C:\\Windows\\System32\\malicious.dll,StartService"
+echo "   Risk: HIGH - Suspicious DLL execution"
+echo "   Reason: DLL name suggests malicious intent"
+echo ""
+
+echo "INVESTIGATION RECOMMENDATIONS:"
+echo "- Verify file existence and digital signatures"
+echo "- Check file creation/modification timestamps"
+echo "- Analyze network connections from these processes"
+echo "- Review parent process relationships"
+echo "- Examine file hashes against threat intelligence"
+EOF
+
+chmod +x detailed_analysis.sh
+./detailed_analysis.sh
+Subtask 3.2: Create Detection Rules
+Generate detection rules for suspicious patterns:
+
+cat > detection_rules.sh << 'EOF'
+#!/bin/bash
+
+echo "=== PERSISTENCE DETECTION RULES ==="
+echo ""
+
+echo "RED FLAGS IN RUN KEYS:"
+echo "1. Executables in \\Users\\Public\\"
+echo "2. PowerShell with -WindowStyle Hidden"
+echo "3. PowerShell with -ExecutionPolicy Bypass"
+echo "4. Rundll32.exe with non-standard DLLs"
+echo "5. Base64 encoded commands"
+echo "6. Temporary directory executables"
+echo "7. Scripts with system-like names in user directories"
+echo ""
+
+echo "YARA-STYLE DETECTION PATTERNS:"
+echo 'rule Suspicious_Run_Key_PowerShell {'
+echo '    strings:'
+echo '        $ps1 = "powershell.exe" nocase'
+echo '        $hidden = "-WindowStyle Hidden" nocase'
+echo '        $bypass = "-ExecutionPolicy Bypass" nocase'
+echo '    condition:'
+echo '        $ps1 and ($hidden or $bypass)'
+echo '}'
+echo ''
+echo 'rule Suspicious_Run_Key_Location {'
+echo '    strings:'
+echo '        $public = "\\Users\\Public\\" nocase'
+echo '        $temp = "\\temp\\" nocase'
+echo '        $downloads = "\\Downloads\\" nocase'
+echo '    condition:'
+echo '        any of them'
+echo '}'
+EOF
+
+chmod +x detection_rules.sh
+./detection_rules.sh
+Subtask 3.3: Generate Investigation Report
+Create a comprehensive report:
+
+cat > investigation_report.sh << 'EOF'
+#!/bin/bash
+
+echo "=== REGISTRY PERSISTENCE INVESTIGATION REPORT ==="
+echo "Generated: $(date)"
+echo "Analyst: Lab Student"
+echo ""
+
+echo "EXECUTIVE SUMMARY:"
+echo "Analysis of Windows registry Run/RunOnce keys revealed multiple"
+echo "suspicious persistence mechanisms indicating potential malware presence."
+echo ""
+
+echo "FINDINGS:"
+echo "- 4 suspicious registry entries identified"
+echo "- 2 high-risk PowerShell-based persistence mechanisms"
+echo "- 2 executables in non-standard locations"
+echo "- Evidence of execution policy bypass attempts"
+echo ""
+
+echo "THREAT ASSESSMENT:"
+echo "Risk Level: HIGH"
+echo "Confidence: HIGH"
+echo "Impact: System compromise likely"
+echo ""
+
+echo "RECOMMENDED ACTIONS:"
+echo "1. Immediate isolation of affected system"
+echo "2. Full malware scan with updated signatures"
+echo "3. Registry key removal of identified threats"
+echo "4. File system analysis of suspicious executables"
+echo "5. Network traffic analysis for C2 communications"
+echo "6. User account privilege review"
+echo ""
+
+echo "TECHNICAL DETAILS:"
+echo "Registry Hives Analyzed: SOFTWARE"
+echo "Keys Examined: Run, RunOnce (HKLM and HKCU)"
+echo "Suspicious Entries: 4"
+echo "False Positives: 0"
+echo ""
+
+echo "IOCs (Indicators of Compromise):"
+echo "- File: C:\\Users\\Public\\malware.exe"
+echo "- File: C:\\Windows\\System32\\malicious.dll"
+echo "- Command: powershell.exe -WindowStyle Hidden"
+echo "- Registry: HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\MaliciousApp"
+EOF
+
+chmod +x investigation_report.sh
+./investigation_report.sh > final_report.txt
+cat final_report.txt
+Verification and Testing
+Verify Tool Installation
+echo "=== VERIFICATION CHECKLIST ==="
+echo "1. Wine installed: $(wine --version 2>/dev/null || echo 'FAILED')"
+echo "2. Registry Explorer downloaded: $(ls ~/RegistryExplorer/RegistryExplorer.exe 2>/dev/null && echo 'SUCCESS' || echo 'FAILED')"
+echo "3. Sample registry created: $(ls ~/registry_samples/sample_software.reg 2>/dev/null && echo 'SUCCESS' || echo 'FAILED')"
+echo "4. Analysis scripts created: $(ls *.sh 2>/dev/null | wc -l) scripts"
+echo "5. Final report generated: $(ls final_report.txt 2>/dev/null && echo 'SUCCESS' || echo 'FAILED')"
+Conclusion
+You have successfully completed Lab 8 on identifying persistence artifacts in Windows Run/RunOnce registry keys. You learned to:
+
+Install and configure Registry Explorer on Linux using Wine
+Navigate Windows registry structure to locate persistence keys
+Identify suspicious entries that indicate malware persistence
+Create detection rules for automated threat hunting
+Generate comprehensive investigation reports
+This knowledge is crucial for digital forensics, incident response, and malware analysis roles. Understanding registry persistence mechanisms helps security professionals detect advanced persistent threats and conduct thorough system investigations. The techniques learned apply directly to real-world scenarios where attackers use registry modifications to maintain persistence on compromised systems.
