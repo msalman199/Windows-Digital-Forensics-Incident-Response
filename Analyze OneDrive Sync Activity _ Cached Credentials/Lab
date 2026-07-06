@@ -1,0 +1,409 @@
+Analyze OneDrive Sync Activity & Cached Credentials
+Learning Objectives
+By completing this lab, you will:
+
+Investigate OneDrive sync artifacts to identify potential data exfiltration
+Extract and analyze cached credentials from system files
+Use open-source forensic tools to examine cloud storage synchronization evidence
+Correlate sync activity with credential access patterns
+Prerequisites
+Basic understanding of Linux command line operations
+Familiarity with file system navigation and text processing
+Knowledge of Windows registry structure concepts
+Understanding of cloud storage synchronization mechanisms
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required tools during the lab exercises.
+
+Task 1: Analyze OneDrive Sync Artifacts
+Subtask 1.1: Install Required Tools
+Install forensic analysis tools and dependencies:
+
+sudo apt update
+sudo apt install -y python3 python3-pip sqlite3 hexdump file tree
+pip3 install --user volatility3 plaso
+Subtask 1.2: Create Sample OneDrive Environment
+Generate realistic OneDrive sync artifacts for analysis:
+
+# Create directory structure
+mkdir -p ~/lab9/{onedrive_artifacts,cached_creds,analysis_output}
+cd ~/lab9
+
+# Create sample OneDrive database structure
+mkdir -p onedrive_artifacts/OneDrive/logs
+mkdir -p onedrive_artifacts/OneDrive/settings
+
+# Generate sample sync log
+cat > onedrive_artifacts/OneDrive/logs/Personal.log << 'EOF'
+2024-01-15 10:30:15 [INFO] Sync started for user: john.doe@company.com
+2024-01-15 10:30:16 [INFO] Uploading: Documents/financial_report_2024.xlsx (2.3MB)
+2024-01-15 10:30:18 [INFO] Uploading: Documents/employee_database.csv (15.7MB)
+2024-01-15 10:30:25 [INFO] Upload completed: Documents/financial_report_2024.xlsx
+2024-01-15 10:30:45 [INFO] Upload completed: Documents/employee_database.csv
+2024-01-15 10:31:02 [INFO] Sync completed successfully
+2024-01-15 14:22:33 [INFO] Downloading: SharedFiles/confidential_project.docx (5.1MB)
+2024-01-15 14:22:40 [INFO] Download completed: SharedFiles/confidential_project.docx
+EOF
+
+# Create sample settings file
+cat > onedrive_artifacts/OneDrive/settings/Personal.ini << 'EOF'
+[Account]
+UserEmail=john.doe@company.com
+UserCID=a1b2c3d4e5f6g7h8
+LastSyncTime=2024-01-15T14:22:40Z
+SyncRoot=/home/john/OneDrive
+
+[Folders]
+Documents=Enabled
+Pictures=Disabled
+Desktop=Enabled
+SharedFolders=Enabled
+
+[Upload]
+LastUploadedFile=Documents/employee_database.csv
+LastUploadTime=2024-01-15T10:30:45Z
+TotalUploaded=18.0MB
+EOF
+Subtask 1.3: Extract Sync Activity Information
+Analyze OneDrive sync logs for suspicious activity:
+
+# Parse sync logs for file transfers
+echo "=== OneDrive Sync Analysis ===" > analysis_output/sync_analysis.txt
+echo "Date: $(date)" >> analysis_output/sync_analysis.txt
+echo "" >> analysis_output/sync_analysis.txt
+
+# Extract upload activities
+echo "UPLOAD ACTIVITIES:" >> analysis_output/sync_analysis.txt
+grep -i "uploading\|upload completed" onedrive_artifacts/OneDrive/logs/Personal.log >> analysis_output/sync_analysis.txt
+echo "" >> analysis_output/sync_analysis.txt
+
+# Extract download activities
+echo "DOWNLOAD ACTIVITIES:" >> analysis_output/sync_analysis.txt
+grep -i "downloading\|download completed" onedrive_artifacts/OneDrive/logs/Personal.log >> analysis_output/sync_analysis.txt
+echo "" >> analysis_output/sync_analysis.txt
+
+# Analyze file sizes and types
+echo "FILE SIZE ANALYSIS:" >> analysis_output/sync_analysis.txt
+grep -oE '[0-9]+\.[0-9]+MB|[0-9]+MB' onedrive_artifacts/OneDrive/logs/Personal.log | sort -nr >> analysis_output/sync_analysis.txt
+echo "" >> analysis_output/sync_analysis.txt
+
+# Extract user information
+echo "USER INFORMATION:" >> analysis_output/sync_analysis.txt
+grep -E "UserEmail|UserCID|LastSyncTime" onedrive_artifacts/OneDrive/settings/Personal.ini >> analysis_output/sync_analysis.txt
+
+# Display results
+cat analysis_output/sync_analysis.txt
+Subtask 1.4: Create Timeline of Sync Events
+Generate a chronological timeline of OneDrive activities:
+
+# Create timeline script
+cat > create_timeline.py << 'EOF'
+#!/usr/bin/env python3
+import re
+from datetime import datetime
+
+def parse_log_file(filename):
+    events = []
+    with open(filename, 'r') as f:
+        for line in f:
+            # Extract timestamp and event
+            match = re.match(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] (.+)', line.strip())
+            if match:
+                timestamp, level, event = match.groups()
+                events.append((timestamp, level, event))
+    return events
+
+def create_timeline(events):
+    print("OneDrive Activity Timeline")
+    print("=" * 50)
+    for timestamp, level, event in sorted(events):
+        print(f"{timestamp} [{level}] {event}")
+
+# Parse the log file
+events = parse_log_file('onedrive_artifacts/OneDrive/logs/Personal.log')
+create_timeline(events)
+EOF
+
+python3 create_timeline.py > analysis_output/timeline.txt
+cat analysis_output/timeline.txt
+Task 2: Extract and Review Cached Credentials
+Subtask 2.1: Create Sample Credential Cache
+Generate sample cached credential files for analysis:
+
+# Create Windows-style credential cache simulation
+mkdir -p cached_creds/Windows/System32/config
+mkdir -p cached_creds/Users/john/AppData/Local/Microsoft/Credentials
+
+# Create sample SAM file simulation (base64 encoded for safety)
+echo "U2FtcGxlIFNBTSBmaWxlIGNvbnRlbnQgZm9yIGFuYWx5c2lz" | base64 -d > cached_creds/Windows/System32/config/SAM
+
+# Create sample credential file
+cat > cached_creds/Users/john/AppData/Local/Microsoft/Credentials/DFBE70A7E5CC19A2 << 'EOF'
+CREDENTIAL_BLOB_HEADER
+Target: MicrosoftOffice16_Data:SSPI:john.doe@company.com
+Type: Generic
+Persist: LocalMachine
+UserName: john.doe@company.com
+Comment: OneDrive Cached Credential
+LastWritten: 2024-01-15T10:25:30Z
+CredentialBlob: [ENCRYPTED_DATA_PLACEHOLDER]
+EOF
+
+# Create browser credential simulation
+mkdir -p cached_creds/Users/john/AppData/Local/Google/Chrome/User\ Data/Default
+cat > "cached_creds/Users/john/AppData/Local/Google/Chrome/User Data/Default/Login Data" << 'EOF'
+SQLite format 3
+CREATE TABLE logins (
+  origin_url VARCHAR NOT NULL,
+  username_value VARCHAR,
+  password_value BLOB,
+  date_created INTEGER NOT NULL,
+  date_last_used INTEGER NOT NULL
+);
+INSERT INTO logins VALUES('https://onedrive.live.com','john.doe@company.com','encrypted_password_blob',13298765432100000,13298765432100000);
+EOF
+Subtask 2.2: Analyze Cached Credentials
+Extract and analyze cached credential information:
+
+# Create credential analysis script
+cat > analyze_credentials.py << 'EOF'
+#!/usr/bin/env python3
+import os
+import re
+from datetime import datetime
+
+def analyze_credential_files(base_path):
+    print("Cached Credential Analysis")
+    print("=" * 40)
+    
+    # Analyze Windows credential files
+    cred_path = os.path.join(base_path, "Users/john/AppData/Local/Microsoft/Credentials")
+    if os.path.exists(cred_path):
+        print("\nWindows Credential Manager Files:")
+        for filename in os.listdir(cred_path):
+            filepath = os.path.join(cred_path, filename)
+            print(f"  File: {filename}")
+            with open(filepath, 'r') as f:
+                content = f.read()
+                # Extract key information
+                target_match = re.search(r'Target: (.+)', content)
+                user_match = re.search(r'UserName: (.+)', content)
+                time_match = re.search(r'LastWritten: (.+)', content)
+                
+                if target_match:
+                    print(f"    Target: {target_match.group(1)}")
+                if user_match:
+                    print(f"    Username: {user_match.group(1)}")
+                if time_match:
+                    print(f"    Last Written: {time_match.group(1)}")
+    
+    # Analyze browser credentials
+    browser_path = os.path.join(base_path, "Users/john/AppData/Local/Google/Chrome/User Data/Default/Login Data")
+    if os.path.exists(browser_path):
+        print("\nBrowser Stored Credentials:")
+        with open(browser_path, 'r') as f:
+            content = f.read()
+            if 'onedrive.live.com' in content:
+                print("    Found OneDrive credentials in browser storage")
+                print("    URL: https://onedrive.live.com")
+                print("    Username: john.doe@company.com")
+                print("    Status: Password encrypted in browser vault")
+
+def correlate_with_sync_activity():
+    print("\n" + "=" * 40)
+    print("Correlation Analysis")
+    print("=" * 40)
+    print("Timeline correlation between credential access and sync activity:")
+    print("  - Credentials last written: 2024-01-15T10:25:30Z")
+    print("  - First sync activity:      2024-01-15T10:30:15Z")
+    print("  - Time difference:          4 minutes 45 seconds")
+    print("  - Assessment: Credentials accessed shortly before sync activity")
+
+# Run analysis
+analyze_credential_files('cached_creds')
+correlate_with_sync_activity()
+EOF
+
+python3 analyze_credentials.py > analysis_output/credential_analysis.txt
+cat analysis_output/credential_analysis.txt
+Subtask 2.3: Search for Credential Exfiltration Evidence
+Look for evidence of credential harvesting or exfiltration:
+
+# Create comprehensive search script
+cat > search_exfiltration.py << 'EOF'
+#!/usr/bin/env python3
+import os
+import re
+
+def search_exfiltration_indicators():
+    print("Credential Exfiltration Indicators")
+    print("=" * 45)
+    
+    indicators = []
+    
+    # Check for suspicious file access patterns
+    print("\n1. Suspicious Access Patterns:")
+    print("   - Multiple credential files accessed in short timeframe")
+    print("   - Browser credential database accessed outside normal hours")
+    
+    # Check for data staging
+    print("\n2. Data Staging Evidence:")
+    staging_files = ['temp_creds.txt', 'export.dat', 'backup.zip']
+    for filename in staging_files:
+        if os.path.exists(f'cached_creds/{filename}'):
+            print(f"   - Found staging file: {filename}")
+            indicators.append(f"Staging file: {filename}")
+    
+    # Check for network activity correlation
+    print("\n3. Network Activity Correlation:")
+    print("   - OneDrive sync activity: 18MB uploaded")
+    print("   - Files uploaded: financial_report_2024.xlsx, employee_database.csv")
+    print("   - Risk Level: HIGH (sensitive data uploaded)")
+    
+    # Check for credential reuse
+    print("\n4. Credential Reuse Analysis:")
+    print("   - Same credentials used for OneDrive and browser")
+    print("   - Account: john.doe@company.com")
+    print("   - Risk: Credential compromise affects multiple services")
+    
+    return indicators
+
+def generate_risk_assessment():
+    print("\n" + "=" * 45)
+    print("Risk Assessment Summary")
+    print("=" * 45)
+    
+    risks = [
+        "HIGH: Large files uploaded to personal OneDrive",
+        "MEDIUM: Cached credentials accessible",
+        "HIGH: Sensitive filenames detected (financial_report, employee_database)",
+        "MEDIUM: Credential reuse across services"
+    ]
+    
+    for risk in risks:
+        print(f"  • {risk}")
+    
+    print("\nRecommendations:")
+    print("  1. Investigate uploaded files for data classification")
+    print("  2. Review user access permissions")
+    print("  3. Implement credential rotation policy")
+    print("  4. Monitor cloud storage usage patterns")
+
+# Run analysis
+indicators = search_exfiltration_indicators()
+generate_risk_assessment()
+EOF
+
+python3 search_exfiltration.py > analysis_output/exfiltration_analysis.txt
+cat analysis_output/exfiltration_analysis.txt
+Subtask 2.4: Generate Investigation Report
+Create a comprehensive investigation report:
+
+# Generate final report
+cat > generate_report.py << 'EOF'
+#!/usr/bin/env python3
+from datetime import datetime
+
+def generate_investigation_report():
+    report = f"""
+DIGITAL FORENSICS INVESTIGATION REPORT
+OneDrive Sync Activity & Cached Credentials Analysis
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+EXECUTIVE SUMMARY
+================
+Investigation of OneDrive synchronization activity and cached credentials 
+revealed potential data exfiltration activities by user john.doe@company.com.
+
+KEY FINDINGS
+============
+1. Data Upload Activity:
+   - 18MB of data uploaded to personal OneDrive
+   - Files: financial_report_2024.xlsx (2.3MB), employee_database.csv (15.7MB)
+   - Upload time: 2024-01-15 10:30:15 - 10:31:02
+
+2. Credential Access:
+   - Cached credentials accessed at 2024-01-15 10:25:30
+   - 4 minutes 45 seconds before sync activity began
+   - Credentials stored in Windows Credential Manager and browser
+
+3. Risk Indicators:
+   - Sensitive file names suggest confidential data
+   - Large file sizes indicate bulk data transfer
+   - Personal cloud storage used for corporate data
+
+TECHNICAL EVIDENCE
+==================
+• OneDrive sync logs show systematic upload of corporate files
+• Cached credentials indicate automated authentication
+• Timeline correlation suggests premeditated activity
+• Browser credentials provide persistent access capability
+
+IMPACT ASSESSMENT
+=================
+• HIGH: Potential exposure of financial and employee data
+• MEDIUM: Credential compromise risk
+• HIGH: Policy violation (personal cloud storage use)
+
+RECOMMENDATIONS
+===============
+1. Immediate: Disable user account and revoke OneDrive access
+2. Short-term: Audit all files in user's OneDrive account
+3. Long-term: Implement DLP controls for cloud storage
+4. Policy: Update acceptable use policy for cloud services
+
+INVESTIGATION METHODOLOGY
+=========================
+• Log file analysis using custom Python scripts
+• Credential cache examination
+• Timeline correlation analysis
+• Risk assessment based on file content and size
+
+EVIDENCE PRESERVATION
+====================
+All artifacts preserved in: ~/lab9/analysis_output/
+• sync_analysis.txt - OneDrive activity analysis
+• timeline.txt - Chronological event timeline
+• credential_analysis.txt - Cached credential examination
+• exfiltration_analysis.txt - Risk assessment and indicators
+"""
+    return report
+
+# Generate and save report
+report = generate_investigation_report()
+with open('analysis_output/investigation_report.txt', 'w') as f:
+    f.write(report)
+
+print("Investigation Report Generated")
+print("=" * 35)
+print(report)
+EOF
+
+python3 generate_report.py
+Verification and Review
+Display all analysis results and verify completeness:
+
+# Show directory structure
+echo "Analysis Output Structure:"
+tree analysis_output/
+
+echo -e "\n=== File Summary ==="
+ls -la analysis_output/
+
+echo -e "\n=== Quick Review of Key Findings ==="
+echo "1. Sync Activity:"
+grep -A 5 "UPLOAD ACTIVITIES" analysis_output/sync_analysis.txt
+
+echo -e "\n2. Credential Evidence:"
+grep -A 3 "Windows Credential Manager" analysis_output/credential_analysis.txt
+
+echo -e "\n3. Risk Assessment:"
+grep -A 5 "Risk Assessment Summary" analysis_output/exfiltration_analysis.txt
+Conclusion
+In this lab, you successfully analyzed OneDrive sync activity and cached credentials to investigate potential data exfiltration. You learned to:
+
+Extract sync artifacts from OneDrive logs and configuration files
+Analyze cached credentials from Windows Credential Manager and browser storage
+Correlate timeline events between credential access and sync activity
+Identify risk indicators suggesting unauthorized data transfer
+Generate comprehensive reports documenting findings and recommendations
+These skills are essential for digital forensics investigators examining cloud storage abuse, insider threats, and data exfiltration incidents. The techniques demonstrated help identify when legitimate cloud services are misused for unauthorized data transfer, enabling organizations to respond quickly to potential security breaches.
