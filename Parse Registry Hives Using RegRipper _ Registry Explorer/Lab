@@ -1,0 +1,272 @@
+ Parse Registry Hives Using RegRipper & Registry Explorer
+Learning Objectives
+By completing this lab, you will:
+
+Install and configure RegRipper and Registry Explorer on Linux
+Extract registry hives from Windows disk images
+Parse registry data to identify system artifacts
+Analyze user activity and system configuration through registry analysis
+Generate comprehensive reports from registry data
+Prerequisites
+Basic Linux command-line knowledge
+Understanding of Windows registry structure
+Familiarity with digital forensics concepts
+Knowledge of file system navigation
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required software during the lab exercises.
+
+Task 1: Install RegRipper and Registry Explorer
+Subtask 1.1: Update System and Install Dependencies
+# Update package repository
+sudo apt update && sudo apt upgrade -y
+
+# Install required dependencies
+sudo apt install -y perl git python3 python3-pip wget curl unzip build-essential
+Subtask 1.2: Install RegRipper
+# Clone RegRipper repository
+cd /opt
+sudo git clone https://github.com/keydet89/RegRipper3.0.git
+sudo mv RegRipper3.0 regripper
+sudo chmod +x /opt/regripper/rip.pl
+
+# Create symbolic link for easy access
+sudo ln -s /opt/regripper/rip.pl /usr/local/bin/rip
+Subtask 1.3: Install Registry Explorer Dependencies
+# Install Wine for running Windows applications on Linux
+sudo dpkg --add-architecture i386
+sudo mkdir -pm755 /etc/apt/keyrings
+sudo wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
+sudo wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/jammy/winehq-jammy.sources
+sudo apt update
+sudo apt install -y winehq-stable
+
+# Download Registry Explorer
+cd /opt
+sudo wget https://f001.backblazeb2.com/file/EricZimmermanTools/RegistryExplorer.zip
+sudo unzip RegistryExplorer.zip -d registry-explorer
+sudo chmod +x /opt/registry-explorer/RegistryExplorer.exe
+Subtask 1.4: Create Sample Registry Hives
+# Create working directory
+mkdir -p ~/forensics/registry-lab
+cd ~/forensics/registry-lab
+
+# Download sample registry hives (simulated Windows registry files)
+wget -O SYSTEM.hiv https://github.com/EricZimmerman/RegistryExplorer/raw/master/RegistryExplorer.Test/TestFiles/SYSTEM
+wget -O SOFTWARE.hiv https://github.com/EricZimmerman/RegistryExplorer/raw/master/RegistryExplorer.Test/TestFiles/SOFTWARE
+wget -O NTUSER.DAT https://github.com/EricZimmerman/RegistryExplorer/raw/master/RegistryExplorer.Test/TestFiles/NTUSER.DAT
+Task 2: Parse Registry Hives with RegRipper
+Subtask 2.1: Analyze SYSTEM Hive
+# Parse SYSTEM hive for computer information
+rip -r SYSTEM.hiv -p compname > system_analysis.txt
+rip -r SYSTEM.hiv -p timezone >> system_analysis.txt
+rip -r SYSTEM.hiv -p shutdown >> system_analysis.txt
+
+# View results
+cat system_analysis.txt
+Subtask 2.2: Analyze SOFTWARE Hive
+# Extract installed programs and version information
+rip -r SOFTWARE.hiv -p uninstall > software_analysis.txt
+rip -r SOFTWARE.hiv -p version >> software_analysis.txt
+rip -r SOFTWARE.hiv -p winver >> software_analysis.txt
+
+# View results
+head -20 software_analysis.txt
+Subtask 2.3: Analyze User Registry (NTUSER.DAT)
+# Extract user activity artifacts
+rip -r NTUSER.DAT -p userassist > user_analysis.txt
+rip -r NTUSER.DAT -p recentdocs >> user_analysis.txt
+rip -r NTUSER.DAT -p runmru >> user_analysis.txt
+
+# View user activity
+cat user_analysis.txt
+Subtask 2.4: Generate Comprehensive Report
+# Create comprehensive analysis script
+cat > analyze_all.sh << 'EOF'
+#!/bin/bash
+echo "=== SYSTEM ANALYSIS ===" > full_report.txt
+rip -r SYSTEM.hiv -p compname >> full_report.txt
+rip -r SYSTEM.hiv -p services >> full_report.txt
+echo -e "\n=== SOFTWARE ANALYSIS ===" >> full_report.txt
+rip -r SOFTWARE.hiv -p uninstall >> full_report.txt
+echo -e "\n=== USER ANALYSIS ===" >> full_report.txt
+rip -r NTUSER.DAT -p userassist >> full_report.txt
+rip -r NTUSER.DAT -p recentdocs >> full_report.txt
+echo "Analysis complete. Report saved to full_report.txt"
+EOF
+
+chmod +x analyze_all.sh
+./analyze_all.sh
+Task 3: Extract and Analyze Registry Artifacts
+Subtask 3.1: Extract Network Configuration
+# Analyze network settings from SYSTEM hive
+rip -r SYSTEM.hiv -p nic > network_config.txt
+rip -r SYSTEM.hiv -p tcpip >> network_config.txt
+
+echo "Network Configuration Analysis:"
+cat network_config.txt
+Subtask 3.2: Extract USB Device History
+# Extract USB device connection history
+rip -r SYSTEM.hiv -p usbstor > usb_devices.txt
+rip -r SYSTEM.hiv -p mountdev >> usb_devices.txt
+
+echo "USB Device History:"
+cat usb_devices.txt
+Subtask 3.3: Extract Browser Artifacts
+# Extract browser-related registry entries
+rip -r NTUSER.DAT -p ie_main > browser_artifacts.txt
+rip -r NTUSER.DAT -p typedurls >> browser_artifacts.txt
+
+echo "Browser Artifacts:"
+cat browser_artifacts.txt
+Subtask 3.4: Extract Startup Programs
+# Identify programs that run at startup
+rip -r SOFTWARE.hiv -p run > startup_programs.txt
+rip -r NTUSER.DAT -p run >> startup_programs.txt
+
+echo "Startup Programs:"
+cat startup_programs.txt
+Task 4: Advanced Registry Analysis
+Subtask 4.1: Timeline Analysis
+# Create timeline of registry modifications
+rip -r SYSTEM.hiv -f ntuser | head -20 > timeline.txt
+rip -r SOFTWARE.hiv -f ntuser | head -20 >> timeline.txt
+
+echo "Registry Timeline (First 40 entries):"
+cat timeline.txt
+Subtask 4.2: Search for Specific Artifacts
+# Search for specific keywords in registry
+grep -i "malware\|virus\|trojan" full_report.txt > security_findings.txt
+grep -i "password\|credential" full_report.txt >> security_findings.txt
+
+echo "Security-Related Findings:"
+cat security_findings.txt
+Subtask 4.3: Export Registry Keys
+# Create script to export specific registry paths
+cat > export_keys.sh << 'EOF'
+#!/bin/bash
+echo "Exporting critical registry keys..."
+rip -r SYSTEM.hiv -p services | grep -A5 -B5 "svchost" > critical_services.txt
+rip -r SOFTWARE.hiv -p uninstall | grep -i "microsoft" > microsoft_software.txt
+echo "Export complete."
+EOF
+
+chmod +x export_keys.sh
+./export_keys.sh
+Task 5: Registry Explorer Analysis (Alternative Method)
+Subtask 5.1: Launch Registry Explorer
+# Initialize Wine environment
+winecfg
+
+# Launch Registry Explorer (in background)
+cd /opt/registry-explorer
+wine RegistryExplorer.exe &
+Subtask 5.2: Manual Registry Exploration
+# Create analysis notes file
+cat > registry_explorer_notes.txt << 'EOF'
+Registry Explorer Analysis Notes:
+================================
+
+1. Load SYSTEM.hiv:
+   - Navigate to ControlSet001\Services
+   - Document running services
+   
+2. Load SOFTWARE.hiv:
+   - Check Microsoft\Windows\CurrentVersion\Uninstall
+   - Document installed software
+   
+3. Load NTUSER.DAT:
+   - Examine Software\Microsoft\Windows\CurrentVersion\Explorer
+   - Document user activity
+
+Key Findings:
+- [Add your findings here]
+EOF
+
+echo "Registry Explorer launched. Use the GUI to analyze hives manually."
+echo "Document findings in registry_explorer_notes.txt"
+Task 6: Generate Final Report
+Subtask 6.1: Compile Analysis Results
+# Create comprehensive final report
+cat > generate_final_report.sh << 'EOF'
+#!/bin/bash
+echo "REGISTRY FORENSICS ANALYSIS REPORT" > final_report.txt
+echo "Generated on: $(date)" >> final_report.txt
+echo "======================================" >> final_report.txt
+
+echo -e "\n1. SYSTEM INFORMATION:" >> final_report.txt
+head -10 system_analysis.txt >> final_report.txt
+
+echo -e "\n2. INSTALLED SOFTWARE:" >> final_report.txt
+head -15 software_analysis.txt >> final_report.txt
+
+echo -e "\n3. USER ACTIVITY:" >> final_report.txt
+head -10 user_analysis.txt >> final_report.txt
+
+echo -e "\n4. NETWORK CONFIGURATION:" >> final_report.txt
+head -10 network_config.txt >> final_report.txt
+
+echo -e "\n5. USB DEVICES:" >> final_report.txt
+head -10 usb_devices.txt >> final_report.txt
+
+echo -e "\n6. SECURITY FINDINGS:" >> final_report.txt
+cat security_findings.txt >> final_report.txt
+
+echo -e "\nReport generation complete."
+EOF
+
+chmod +x generate_final_report.sh
+./generate_final_report.sh
+Subtask 6.2: Verify Analysis Results
+# Display final report summary
+echo "=== FINAL REPORT SUMMARY ==="
+wc -l *.txt
+echo ""
+echo "Files created during analysis:"
+ls -la *.txt *.sh
+echo ""
+echo "Report preview:"
+head -20 final_report.txt
+Verification and Testing
+Verify RegRipper Installation
+# Test RegRipper functionality
+rip -l | head -10
+echo "RegRipper plugins available: $(rip -l | wc -l)"
+Verify Analysis Completeness
+# Check if all analysis files were created
+required_files=("system_analysis.txt" "software_analysis.txt" "user_analysis.txt" "network_config.txt" "usb_devices.txt" "final_report.txt")
+
+echo "Checking analysis completeness:"
+for file in "${required_files[@]}"; do
+    if [ -f "$file" ]; then
+        echo "✓ $file exists ($(wc -l < "$file") lines)"
+    else
+        echo "✗ $file missing"
+    fi
+done
+Troubleshooting
+Common Issues and Solutions
+RegRipper not found:
+
+# Verify installation path
+ls -la /opt/regripper/
+# Recreate symbolic link if needed
+sudo ln -sf /opt/regripper/rip.pl /usr/local/bin/rip
+Wine configuration issues:
+
+# Reconfigure Wine
+winecfg
+# Set Windows version to Windows 10
+Permission errors:
+
+# Fix permissions
+sudo chown -R $USER:$USER ~/forensics/
+chmod +x *.sh
+Conclusion
+In this lab, you successfully:
+
+Installed and configured RegRipper and Registry Explorer on Linux
+Parsed Windows registry hives to extract system and user artifacts
+Analyzed critical registry data including system configuration, installed software, user activity, and network settings
+Generated comprehensive reports documenting forensic findings
+Identified security-relevant artifacts through targeted registry analysis
+These registry analysis skills are essential for digital forensics investigations, incident response, and system administration. Registry artifacts provide valuable insights into system configuration, user behavior, malware presence, and historical system activity. The techniques learned in this lab form the foundation for advanced Windows forensics and threat hunting activities.
