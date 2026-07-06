@@ -1,0 +1,9 @@
+=== FORENSIC EVIDENCE LOG ===
+Case: Windows_Image_Analysis
+Date: $(date)
+Investigator: Lab Student
+Image File: windows_sample.dd
+Image Hash: $(md5sum ~/forensics-lab/windows_sample.dd | cut -d' ' -f1)
+Mount Point: /mnt/forensic-image
+Analysis Tool: Autopsy 4.20.0
+Status: Analysis Complete
