@@ -1,0 +1,252 @@
+Parse PST/OST Files with pffexport & libpff
+Objectives
+By completing this lab, you will:
+
+Install and configure libpff tools for email forensics
+Extract data from PST/OST files using pffexport
+Analyze email artifacts and metadata
+Understand the structure of Outlook data files
+Perform forensic analysis on email communications
+Prerequisites
+Basic Linux command-line knowledge
+Understanding of file systems and directory navigation
+Familiarity with email concepts (headers, attachments, folders)
+No prior forensics experience required
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required software during the lab exercises.
+
+Task 1: Install libpff and Required Tools
+Step 1.1: Update System and Install Dependencies
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y build-essential autotools-dev automake libtool pkg-config git wget
+Step 1.2: Install libpff from Source
+cd /tmp
+wget https://github.com/libyal/libpff/releases/download/20210424/libpff-alpha-20210424.tar.gz
+tar -xzf libpff-alpha-20210424.tar.gz
+cd libpff-20210424
+Step 1.3: Compile and Install libpff
+./configure --enable-python3
+make
+sudo make install
+sudo ldconfig
+Step 1.4: Verify Installation
+pffexport -V
+pffinfo -V
+Expected output should show version information for both tools.
+
+Task 2: Prepare Sample PST File
+Step 2.1: Create Sample PST File
+Since we need a PST file for analysis, we'll download a sample or create a test environment:
+
+mkdir -p ~/email_forensics/samples
+cd ~/email_forensics/samples
+Step 2.2: Download Sample PST File
+# Download a sample PST file for testing
+wget -O sample.pst "https://github.com/libyal/libpff/raw/main/tests/data/Export.pst"
+If the download fails, create a minimal test structure:
+
+# Alternative: Use any available PST file or create test data
+ls -la *.pst
+Task 3: Extract Data Using pffexport
+Step 3.1: Basic PST Information
+cd ~/email_forensics/samples
+pffinfo sample.pst
+This command displays:
+
+File format version
+Creation time
+Last modification time
+Number of items
+Encryption status
+Step 3.2: Export PST Contents
+mkdir -p ~/email_forensics/extracted
+pffexport -t ~/email_forensics/extracted sample.pst
+Step 3.3: Examine Extracted Structure
+cd ~/email_forensics/extracted
+find . -type f | head -20
+ls -la
+Step 3.4: Export with Detailed Options
+cd ~/email_forensics/samples
+pffexport -f all -t ~/email_forensics/detailed_export sample.pst
+The -f all flag extracts:
+
+Email messages
+Attachments
+Calendar items
+Contacts
+Tasks
+Task 4: Analyze Email Artifacts
+Step 4.1: Examine Email Messages
+cd ~/email_forensics/extracted
+find . -name "*.eml" | head -5 | while read file; do
+    echo "=== Analyzing: $file ==="
+    head -20 "$file"
+    echo ""
+done
+Step 4.2: Search for Specific Content
+# Search for emails containing specific keywords
+grep -r -i "password\|confidential\|urgent" . --include="*.eml"
+Step 4.3: Extract Email Headers
+# Create a script to extract headers
+cat > extract_headers.sh << 'EOF'
+#!/bin/bash
+for file in $(find . -name "*.eml"); do
+    echo "=== Headers from: $file ==="
+    sed -n '1,/^$/p' "$file" | grep -E "^(From|To|Subject|Date|Message-ID):"
+    echo ""
+done
+EOF
+
+chmod +x extract_headers.sh
+./extract_headers.sh | head -30
+Step 4.4: Analyze Attachments
+# Find and list all attachments
+find ~/email_forensics/extracted -type f ! -name "*.eml" -exec ls -lh {} \;
+
+# Count attachment types
+find ~/email_forensics/extracted -type f ! -name "*.eml" | sed 's/.*\.//' | sort | uniq -c
+Task 5: Advanced Analysis with libpff
+Step 5.1: Create Analysis Script
+cat > analyze_pst.py << 'EOF'
+#!/usr/bin/env python3
+import os
+import sys
+
+def analyze_extracted_data(base_path):
+    """Analyze extracted PST data"""
+    
+    email_count = 0
+    attachment_count = 0
+    total_size = 0
+    
+    for root, dirs, files in os.walk(base_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            file_size = os.path.getsize(file_path)
+            total_size += file_size
+            
+            if file.endswith('.eml'):
+                email_count += 1
+            elif not file.endswith('.eml'):
+                attachment_count += 1
+    
+    print(f"Email Analysis Summary:")
+    print(f"- Total emails: {email_count}")
+    print(f"- Total attachments: {attachment_count}")
+    print(f"- Total size: {total_size / 1024:.2f} KB")
+    
+    return email_count, attachment_count, total_size
+
+if __name__ == "__main__":
+    base_path = "/home/student/email_forensics/extracted"
+    if os.path.exists(base_path):
+        analyze_extracted_data(base_path)
+    else:
+        print("Extracted data directory not found")
+EOF
+
+chmod +x analyze_pst.py
+python3 analyze_pst.py
+Step 5.2: Timeline Analysis
+# Create timeline of email activity
+cat > email_timeline.sh << 'EOF'
+#!/bin/bash
+echo "Email Timeline Analysis"
+echo "======================"
+
+find ~/email_forensics/extracted -name "*.eml" -exec grep -l "Date:" {} \; | while read file; do
+    date_line=$(grep "^Date:" "$file" | head -1)
+    echo "$date_line - $(basename "$file")"
+done | sort
+EOF
+
+chmod +x email_timeline.sh
+./email_timeline.sh
+Step 5.3: Generate Forensic Report
+cat > forensic_report.sh << 'EOF'
+#!/bin/bash
+REPORT_FILE="~/email_forensics/forensic_report.txt"
+
+echo "PST/OST Forensic Analysis Report" > $REPORT_FILE
+echo "Generated: $(date)" >> $REPORT_FILE
+echo "=================================" >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+echo "1. File Information:" >> $REPORT_FILE
+pffinfo ~/email_forensics/samples/sample.pst >> $REPORT_FILE 2>/dev/null
+echo "" >> $REPORT_FILE
+
+echo "2. Extraction Summary:" >> $REPORT_FILE
+python3 analyze_pst.py >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+echo "3. Email Headers Sample:" >> $REPORT_FILE
+find ~/email_forensics/extracted -name "*.eml" | head -3 | while read file; do
+    echo "--- $file ---" >> $REPORT_FILE
+    sed -n '1,/^$/p' "$file" | head -10 >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+done
+
+echo "Report generated: $REPORT_FILE"
+cat $REPORT_FILE
+EOF
+
+chmod +x forensic_report.sh
+./forensic_report.sh
+Task 6: Verification and Documentation
+Step 6.1: Verify Extraction Integrity
+# Check for any extraction errors
+cd ~/email_forensics
+find . -name "*.log" -exec cat {} \;
+
+# Verify file counts
+echo "Verification Summary:"
+echo "- PST files processed: $(find samples -name "*.pst" | wc -l)"
+echo "- Emails extracted: $(find extracted -name "*.eml" | wc -l)"
+echo "- Total files extracted: $(find extracted -type f | wc -l)"
+Step 6.2: Create Evidence Documentation
+cat > evidence_log.txt << EOF
+Email Forensics Evidence Log
+===========================
+Date: $(date)
+Analyst: Student
+Case: Lab 16 - PST Analysis
+
+Source Files:
+$(ls -la ~/email_forensics/samples/)
+
+Extraction Method: pffexport (libpff)
+Output Location: ~/email_forensics/extracted/
+
+Chain of Custody: Maintained throughout analysis
+Tools Used: libpff v$(pffexport -V 2>&1 | head -1)
+EOF
+
+cat evidence_log.txt
+Troubleshooting
+Common Issues and Solutions
+Issue: pffexport command not found
+
+# Solution: Ensure libpff is properly installed
+sudo ldconfig
+export PATH=$PATH:/usr/local/bin
+Issue: Permission denied errors
+
+# Solution: Check file permissions
+chmod 644 ~/email_forensics/samples/*.pst
+Issue: Empty extraction directory
+
+# Solution: Verify PST file integrity
+file ~/email_forensics/samples/sample.pst
+pffinfo ~/email_forensics/samples/sample.pst
+Conclusion
+In this lab, you successfully:
+
+Installed and configured libpff tools for email forensics
+Extracted email data from PST files using pffexport
+Analyzed email artifacts including headers, content, and attachments
+Created forensic reports and documentation
+Learned to verify extraction integrity and maintain evidence chains
+These skills are essential for digital forensics investigations involving Microsoft Outlook data files. The ability to parse PST/OST files is crucial for email forensics, corporate investigations, and legal discovery processes. You now have hands-on experience with industry-standard open-source tools used by forensic professionals worldwide.
+
+The techniques learned here apply to real-world scenarios including incident response, litigation support, and compliance auditing where email communications must be preserved and analyzed systematically.
