@@ -1,0 +1,674 @@
+ Investigate Google Drive/Dropbox Remnants on Disk
+Learning Objectives
+By completing this lab, you will:
+
+Extract and analyze Google Drive and Dropbox artifacts from disk using open-source forensic tools
+Identify file synchronization patterns and deletion activities
+Understand cloud storage remnants and their forensic significance
+Practice artifact recovery techniques on Linux systems
+Prerequisites
+Basic Linux command-line knowledge
+Understanding of file systems and directory structures
+Familiarity with forensic investigation concepts
+Knowledge of cloud storage synchronization basics
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux machine. The provided system is bare metal with no pre-installed forensic tools, so you will install all required tools during the lab exercises.
+
+Task 1: Extract and Analyze Google Drive/Dropbox Artifacts
+Subtask 1.1: Install Required Tools
+Install essential forensic and analysis tools:
+
+sudo apt update
+sudo apt install -y sqlite3 python3-pip git hexdump tree file
+pip3 install --user volatility3
+Install additional forensic utilities:
+
+sudo apt install -y sleuthkit autopsy-core binwalk strings
+Subtask 1.2: Create Sample Cloud Storage Environment
+Generate realistic Google Drive and Dropbox artifacts for analysis:
+
+# Create directory structure
+mkdir -p ~/forensics_lab/google_drive_artifacts
+mkdir -p ~/forensics_lab/dropbox_artifacts
+mkdir -p ~/forensics_lab/evidence
+
+cd ~/forensics_lab
+Create sample Google Drive database structure:
+
+# Simulate Google Drive sync database
+sqlite3 google_drive_artifacts/sync_config.db << 'EOF'
+CREATE TABLE sync_items (
+    id INTEGER PRIMARY KEY,
+    local_path TEXT,
+    cloud_id TEXT,
+    last_sync TIMESTAMP,
+    sync_status TEXT,
+    file_size INTEGER
+);
+
+INSERT INTO sync_items VALUES 
+(1, '/home/user/GoogleDrive/document1.pdf', 'gd_12345abc', '2024-01-15 10:30:00', 'synced', 2048576),
+(2, '/home/user/GoogleDrive/photo.jpg', 'gd_67890def', '2024-01-14 15:45:00', 'deleted', 5242880),
+(3, '/home/user/GoogleDrive/project/notes.txt', 'gd_abcdef123', '2024-01-16 09:15:00', 'pending', 1024);
+
+CREATE TABLE deleted_items (
+    id INTEGER PRIMARY KEY,
+    original_path TEXT,
+    deletion_time TIMESTAMP,
+    cloud_id TEXT
+);
+
+INSERT INTO deleted_items VALUES
+(1, '/home/user/GoogleDrive/old_report.docx', '2024-01-10 14:20:00', 'gd_deleted_001'),
+(2, '/home/user/GoogleDrive/temp_file.tmp', '2024-01-12 11:30:00', 'gd_deleted_002');
+EOF
+Create sample Dropbox artifacts:
+
+# Simulate Dropbox configuration and cache
+mkdir -p dropbox_artifacts/.dropbox/cache
+mkdir -p dropbox_artifacts/.dropbox/logs
+
+# Create Dropbox database
+sqlite3 dropbox_artifacts/.dropbox/dropbox.db << 'EOF'
+CREATE TABLE file_journal (
+    id INTEGER PRIMARY KEY,
+    server_path TEXT,
+    local_path TEXT,
+    sync_time TIMESTAMP,
+    operation TEXT,
+    file_hash TEXT
+);
+
+INSERT INTO file_journal VALUES
+(1, '/presentation.pptx', '/home/user/Dropbox/presentation.pptx', '2024-01-15 16:20:00', 'upload', 'sha256:abc123def456'),
+(2, '/backup/data.zip', '/home/user/Dropbox/backup/data.zip', '2024-01-14 12:10:00', 'download', 'sha256:def456ghi789'),
+(3, '/shared/contract.pdf', '/home/user/Dropbox/shared/contract.pdf', '2024-01-13 08:45:00', 'delete', 'sha256:ghi789jkl012');
+
+CREATE TABLE sync_history (
+    timestamp TIMESTAMP,
+    action TEXT,
+    file_path TEXT,
+    bytes_transferred INTEGER
+);
+
+INSERT INTO sync_history VALUES
+('2024-01-15 16:20:15', 'UPLOAD_COMPLETE', '/presentation.pptx', 15728640),
+('2024-01-14 12:10:30', 'DOWNLOAD_COMPLETE', '/backup/data.zip', 52428800),
+('2024-01-13 08:45:22', 'DELETE_CONFIRMED', '/shared/contract.pdf', 0);
+EOF
+Create log files:
+
+# Create Dropbox log file
+cat > dropbox_artifacts/.dropbox/logs/sync.log << 'EOF'
+2024-01-15 16:19:45 [INFO] Starting sync process
+2024-01-15 16:19:50 [INFO] Uploading: presentation.pptx (15.0 MB)
+2024-01-15 16:20:15 [INFO] Upload complete: presentation.pptx
+2024-01-14 12:09:30 [INFO] Downloading: backup/data.zip (50.0 MB)
+2024-01-14 12:10:30 [INFO] Download complete: backup/data.zip
+2024-01-13 08:45:00 [WARN] Deleting: shared/contract.pdf
+2024-01-13 08:45:22 [INFO] Delete confirmed: shared/contract.pdf
+EOF
+
+# Create Google Drive log simulation
+mkdir -p google_drive_artifacts/logs
+cat > google_drive_artifacts/logs/sync_activity.log << 'EOF'
+[2024-01-16 09:15:30] SYNC_START: Checking for changes
+[2024-01-16 09:15:35] FILE_CHANGED: project/notes.txt (local modification detected)
+[2024-01-15 10:29:45] UPLOAD_SUCCESS: document1.pdf -> cloud_id: gd_12345abc
+[2024-01-14 15:44:30] DELETE_REQUEST: photo.jpg (user initiated)
+[2024-01-14 15:45:00] DELETE_CONFIRMED: photo.jpg removed from cloud
+EOF
+Subtask 1.3: Analyze Google Drive Artifacts
+Extract and analyze Google Drive synchronization data:
+
+cd ~/forensics_lab
+
+# Analyze Google Drive database
+echo "=== Google Drive Sync Analysis ==="
+echo "Active sync items:"
+sqlite3 google_drive_artifacts/sync_config.db "SELECT * FROM sync_items;"
+
+echo -e "\nDeleted items:"
+sqlite3 google_drive_artifacts/sync_config.db "SELECT * FROM deleted_items;"
+Create analysis script for Google Drive:
+
+cat > analyze_gdrive.py << 'EOF'
+#!/usr/bin/env python3
+import sqlite3
+import os
+from datetime import datetime
+
+def analyze_gdrive_db(db_path):
+    print("Google Drive Forensic Analysis")
+    print("=" * 40)
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Analyze sync items
+        print("\n1. SYNCHRONIZATION ACTIVITY:")
+        cursor.execute("SELECT local_path, sync_status, last_sync, file_size FROM sync_items")
+        for row in cursor.fetchall():
+            path, status, sync_time, size = row
+            size_mb = size / (1024*1024) if size else 0
+            print(f"   Path: {path}")
+            print(f"   Status: {status}")
+            print(f"   Last Sync: {sync_time}")
+            print(f"   Size: {size_mb:.2f} MB")
+            print()
+        
+        # Analyze deleted items
+        print("2. DELETION ACTIVITY:")
+        cursor.execute("SELECT original_path, deletion_time, cloud_id FROM deleted_items")
+        for row in cursor.fetchall():
+            path, del_time, cloud_id = row
+            print(f"   Deleted File: {path}")
+            print(f"   Deletion Time: {del_time}")
+            print(f"   Cloud ID: {cloud_id}")
+            print()
+            
+        conn.close()
+        
+    except Exception as e:
+        print(f"Error analyzing database: {e}")
+
+if __name__ == "__main__":
+    db_path = "google_drive_artifacts/sync_config.db"
+    if os.path.exists(db_path):
+        analyze_gdrive_db(db_path)
+    else:
+        print("Google Drive database not found!")
+EOF
+
+chmod +x analyze_gdrive.py
+python3 analyze_gdrive.py
+Subtask 1.4: Analyze Dropbox Artifacts
+Extract and analyze Dropbox synchronization data:
+
+echo "=== Dropbox Forensic Analysis ==="
+
+# Analyze Dropbox database
+echo "File journal entries:"
+sqlite3 dropbox_artifacts/.dropbox/dropbox.db "SELECT * FROM file_journal;"
+
+echo -e "\nSync history:"
+sqlite3 dropbox_artifacts/.dropbox/dropbox.db "SELECT * FROM sync_history ORDER BY timestamp DESC;"
+Create comprehensive Dropbox analysis script:
+
+cat > analyze_dropbox.py << 'EOF'
+#!/usr/bin/env python3
+import sqlite3
+import os
+import re
+from datetime import datetime
+
+def analyze_dropbox_db(db_path):
+    print("Dropbox Forensic Analysis")
+    print("=" * 40)
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Analyze file journal
+        print("\n1. FILE JOURNAL ANALYSIS:")
+        cursor.execute("SELECT server_path, local_path, sync_time, operation, file_hash FROM file_journal ORDER BY sync_time DESC")
+        for row in cursor.fetchall():
+            server_path, local_path, sync_time, operation, file_hash = row
+            print(f"   Server Path: {server_path}")
+            print(f"   Local Path: {local_path}")
+            print(f"   Operation: {operation}")
+            print(f"   Sync Time: {sync_time}")
+            print(f"   File Hash: {file_hash}")
+            print()
+        
+        # Analyze sync history
+        print("2. SYNC HISTORY ANALYSIS:")
+        cursor.execute("SELECT timestamp, action, file_path, bytes_transferred FROM sync_history ORDER BY timestamp DESC")
+        total_uploaded = 0
+        total_downloaded = 0
+        
+        for row in cursor.fetchall():
+            timestamp, action, file_path, bytes_transferred = row
+            bytes_mb = bytes_transferred / (1024*1024) if bytes_transferred else 0
+            print(f"   Time: {timestamp}")
+            print(f"   Action: {action}")
+            print(f"   File: {file_path}")
+            print(f"   Data: {bytes_mb:.2f} MB")
+            
+            if 'UPLOAD' in action:
+                total_uploaded += bytes_transferred
+            elif 'DOWNLOAD' in action:
+                total_downloaded += bytes_transferred
+            print()
+        
+        print("3. TRAFFIC SUMMARY:")
+        print(f"   Total Uploaded: {total_uploaded/(1024*1024):.2f} MB")
+        print(f"   Total Downloaded: {total_downloaded/(1024*1024):.2f} MB")
+        
+        conn.close()
+        
+    except Exception as e:
+        print(f"Error analyzing database: {e}")
+
+def analyze_dropbox_logs(log_path):
+    print("\n4. LOG FILE ANALYSIS:")
+    if os.path.exists(log_path):
+        with open(log_path, 'r') as f:
+            lines = f.readlines()
+            
+        upload_count = 0
+        download_count = 0
+        delete_count = 0
+        
+        for line in lines:
+            if 'Upload' in line:
+                upload_count += 1
+                print(f"   UPLOAD: {line.strip()}")
+            elif 'Download' in line:
+                download_count += 1
+                print(f"   DOWNLOAD: {line.strip()}")
+            elif 'Delet' in line:
+                delete_count += 1
+                print(f"   DELETE: {line.strip()}")
+        
+        print(f"\n   Summary: {upload_count} uploads, {download_count} downloads, {delete_count} deletions")
+    else:
+        print("   Log file not found!")
+
+if __name__ == "__main__":
+    db_path = "dropbox_artifacts/.dropbox/dropbox.db"
+    log_path = "dropbox_artifacts/.dropbox/logs/sync.log"
+    
+    if os.path.exists(db_path):
+        analyze_dropbox_db(db_path)
+    else:
+        print("Dropbox database not found!")
+    
+    analyze_dropbox_logs(log_path)
+EOF
+
+chmod +x analyze_dropbox.py
+python3 analyze_dropbox.py
+Task 2: Review File Syncing and Deletion Activity
+Subtask 2.1: Timeline Analysis
+Create a comprehensive timeline of cloud storage activities:
+
+cat > timeline_analysis.py << 'EOF'
+#!/usr/bin/env python3
+import sqlite3
+import os
+import re
+from datetime import datetime
+
+def create_timeline():
+    print("Cloud Storage Activity Timeline")
+    print("=" * 50)
+    
+    events = []
+    
+    # Extract Google Drive events
+    gdrive_db = "google_drive_artifacts/sync_config.db"
+    if os.path.exists(gdrive_db):
+        conn = sqlite3.connect(gdrive_db)
+        cursor = conn.cursor()
+        
+        # Sync events
+        cursor.execute("SELECT local_path, last_sync, sync_status FROM sync_items")
+        for row in cursor.fetchall():
+            path, sync_time, status = row
+            events.append((sync_time, f"GDRIVE_SYNC", f"{status}: {path}"))
+        
+        # Deletion events
+        cursor.execute("SELECT original_path, deletion_time FROM deleted_items")
+        for row in cursor.fetchall():
+            path, del_time = row
+            events.append((del_time, f"GDRIVE_DELETE", f"deleted: {path}"))
+        
+        conn.close()
+    
+    # Extract Dropbox events
+    dropbox_db = "dropbox_artifacts/.dropbox/dropbox.db"
+    if os.path.exists(dropbox_db):
+        conn = sqlite3.connect(dropbox_db)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT timestamp, action, file_path FROM sync_history")
+        for row in cursor.fetchall():
+            timestamp, action, file_path = row
+            events.append((timestamp, f"DROPBOX_{action}", file_path))
+        
+        conn.close()
+    
+    # Sort events by timestamp
+    events.sort(key=lambda x: x[0])
+    
+    print("\nCHRONOLOGICAL ACTIVITY:")
+    for timestamp, event_type, details in events:
+        print(f"{timestamp} | {event_type:20} | {details}")
+    
+    return events
+
+def analyze_patterns(events):
+    print("\n" + "=" * 50)
+    print("PATTERN ANALYSIS:")
+    
+    # Count event types
+    event_counts = {}
+    for _, event_type, _ in events:
+        event_counts[event_type] = event_counts.get(event_type, 0) + 1
+    
+    print("\nEvent Distribution:")
+    for event_type, count in sorted(event_counts.items()):
+        print(f"   {event_type}: {count} occurrences")
+    
+    # Identify suspicious patterns
+    print("\nSuspicious Activity Indicators:")
+    
+    deletion_events = [e for e in events if 'DELETE' in e[1]]
+    if len(deletion_events) > 0:
+        print(f"   - {len(deletion_events)} deletion events detected")
+        for timestamp, event_type, details in deletion_events:
+            print(f"     {timestamp}: {details}")
+    
+    # Check for rapid sync activity
+    sync_events = [e for e in events if 'SYNC' in e[1] or 'UPLOAD' in e[1] or 'DOWNLOAD' in e[1]]
+    if len(sync_events) > 3:
+        print(f"   - High sync activity: {len(sync_events)} sync operations")
+
+if __name__ == "__main__":
+    events = create_timeline()
+    analyze_patterns(events)
+EOF
+
+chmod +x timeline_analysis.py
+python3 timeline_analysis.py
+Subtask 2.2: Artifact Recovery and Analysis
+Search for additional cloud storage remnants:
+
+# Search for cloud storage configuration files
+echo "=== Searching for Cloud Storage Remnants ==="
+
+# Find potential cloud storage directories
+find ~ -type d -name "*dropbox*" -o -name "*google*" -o -name "*drive*" 2>/dev/null | head -10
+
+# Search for database files
+find ~/forensics_lab -name "*.db" -o -name "*.sqlite" -o -name "*.sqlite3" 2>/dev/null
+
+# Look for log files
+find ~/forensics_lab -name "*.log" -type f 2>/dev/null
+Create comprehensive artifact extraction script:
+
+cat > extract_artifacts.py << 'EOF'
+#!/usr/bin/env python3
+import os
+import sqlite3
+import hashlib
+import json
+
+def extract_file_hashes(directory):
+    """Extract file hashes for integrity verification"""
+    print(f"\nFile Hash Analysis for: {directory}")
+    print("-" * 40)
+    
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            file_path = os.path.join(root, file)
+            try:
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+                    md5_hash = hashlib.md5(content).hexdigest()
+                    sha256_hash = hashlib.sha256(content).hexdigest()
+                
+                print(f"File: {file_path}")
+                print(f"  MD5: {md5_hash}")
+                print(f"  SHA256: {sha256_hash}")
+                print(f"  Size: {len(content)} bytes")
+                print()
+            except Exception as e:
+                print(f"Error processing {file_path}: {e}")
+
+def analyze_database_structure(db_path):
+    """Analyze database structure and content"""
+    print(f"\nDatabase Structure Analysis: {db_path}")
+    print("-" * 40)
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Get table names
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        
+        print("Tables found:")
+        for table in tables:
+            table_name = table[0]
+            print(f"  - {table_name}")
+            
+            # Get table schema
+            cursor.execute(f"PRAGMA table_info({table_name});")
+            columns = cursor.fetchall()
+            
+            print("    Columns:")
+            for col in columns:
+                print(f"      {col[1]} ({col[2]})")
+            
+            # Count records
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name};")
+            count = cursor.fetchone()[0]
+            print(f"    Records: {count}")
+            print()
+        
+        conn.close()
+        
+    except Exception as e:
+        print(f"Error analyzing database: {e}")
+
+def generate_forensic_report():
+    """Generate comprehensive forensic report"""
+    report = {
+        "analysis_timestamp": str(datetime.now()),
+        "google_drive_artifacts": {},
+        "dropbox_artifacts": {},
+        "summary": {}
+    }
+    
+    # Analyze Google Drive
+    gdrive_db = "google_drive_artifacts/sync_config.db"
+    if os.path.exists(gdrive_db):
+        conn = sqlite3.connect(gdrive_db)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM sync_items WHERE sync_status='synced'")
+        synced_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM sync_items WHERE sync_status='deleted'")
+        deleted_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM deleted_items")
+        total_deleted = cursor.fetchone()[0]
+        
+        report["google_drive_artifacts"] = {
+            "synced_files": synced_count,
+            "deleted_files": deleted_count,
+            "total_deletions": total_deleted
+        }
+        
+        conn.close()
+    
+    # Analyze Dropbox
+    dropbox_db = "dropbox_artifacts/.dropbox/dropbox.db"
+    if os.path.exists(dropbox_db):
+        conn = sqlite3.connect(dropbox_db)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM file_journal WHERE operation='upload'")
+        uploads = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM file_journal WHERE operation='download'")
+        downloads = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM file_journal WHERE operation='delete'")
+        deletions = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT SUM(bytes_transferred) FROM sync_history WHERE action LIKE '%UPLOAD%'")
+        total_uploaded = cursor.fetchone()[0] or 0
+        
+        report["dropbox_artifacts"] = {
+            "uploads": uploads,
+            "downloads": downloads,
+            "deletions": deletions,
+            "total_uploaded_bytes": total_uploaded
+        }
+        
+        conn.close()
+    
+    # Generate summary
+    total_files = report.get("google_drive_artifacts", {}).get("synced_files", 0) + \
+                  report.get("dropbox_artifacts", {}).get("uploads", 0)
+    
+    total_deletions = report.get("google_drive_artifacts", {}).get("total_deletions", 0) + \
+                      report.get("dropbox_artifacts", {}).get("deletions", 0)
+    
+    report["summary"] = {
+        "total_files_processed": total_files,
+        "total_deletions": total_deletions,
+        "evidence_significance": "HIGH" if total_deletions > 0 else "MEDIUM"
+    }
+    
+    # Save report
+    with open("forensic_report.json", "w") as f:
+        json.dump(report, f, indent=2)
+    
+    print("FORENSIC ANALYSIS REPORT")
+    print("=" * 40)
+    print(json.dumps(report, indent=2))
+
+if __name__ == "__main__":
+    from datetime import datetime
+    
+    # Extract file hashes
+    extract_file_hashes("google_drive_artifacts")
+    extract_file_hashes("dropbox_artifacts")
+    
+    # Analyze databases
+    if os.path.exists("google_drive_artifacts/sync_config.db"):
+        analyze_database_structure("google_drive_artifacts/sync_config.db")
+    
+    if os.path.exists("dropbox_artifacts/.dropbox/dropbox.db"):
+        analyze_database_structure("dropbox_artifacts/.dropbox/dropbox.db")
+    
+    # Generate report
+    generate_forensic_report()
+EOF
+
+chmod +x extract_artifacts.py
+python3 extract_artifacts.py
+Subtask 2.3: Evidence Documentation
+Create final evidence summary:
+
+cat > evidence_summary.py << 'EOF'
+#!/usr/bin/env python3
+import os
+import json
+from datetime import datetime
+
+def create_evidence_summary():
+    print("CLOUD STORAGE FORENSIC EVIDENCE SUMMARY")
+    print("=" * 60)
+    print(f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print()
+    
+    print("ARTIFACTS DISCOVERED:")
+    print("-" * 30)
+    
+    # Google Drive Evidence
+    print("1. GOOGLE DRIVE ARTIFACTS:")
+    if os.path.exists("google_drive_artifacts/sync_config.db"):
+        print("   ✓ Sync configuration database found")
+        print("   ✓ File synchronization records recovered")
+        print("   ✓ Deletion activity logs identified")
+    
+    if os.path.exists("google_drive_artifacts/logs/sync_activity.log"):
+        print("   ✓ Sync activity logs recovered")
+    
+    # Dropbox Evidence
+    print("\n2. DROPBOX ARTIFACTS:")
+    if os.path.exists("dropbox_artifacts/.dropbox/dropbox.db"):
+        print("   ✓ Dropbox database recovered")
+        print("   ✓ File journal entries found")
+        print("   ✓ Sync history records identified")
+    
+    if os.path.exists("dropbox_artifacts/.dropbox/logs/sync.log"):
+        print("   ✓ Sync log files recovered")
+    
+    print("\nFORENSIC SIGNIFICANCE:")
+    print("-" * 30)
+    print("• File synchronization patterns reveal user activity")
+    print("• Deletion records indicate potential evidence destruction")
+    print("• Timestamp analysis enables activity timeline reconstruction")
+    print("• Hash values provide file integrity verification")
+    print("• Cloud storage artifacts persist after file deletion")
+    
+    print("\nRECOMMENDATIONS:")
+    print("-" * 30)
+    print("• Preserve all database files for legal proceedings")
+    print("• Cross-reference timestamps with other system logs")
+    print("• Investigate cloud accounts for additional evidence")
+    print("• Check for file recovery possibilities from cloud trash")
+    
+    # Load forensic report if available
+    if os.path.exists("forensic_report.json"):
+        print("\nQUANTITATIVE ANALYSIS:")
+        print("-" * 30)
+        with open("forensic_report.json", "r") as f:
+            report = json.load(f)
+        
+        gdrive = report.get("google_drive_artifacts", {})
+        dropbox = report.get("dropbox_artifacts", {})
+        
+        print(f"Google Drive - Synced Files: {gdrive.get('synced_files', 0)}")
+        print(f"Google Drive - Deleted Files: {gdrive.get('deleted_files', 0)}")
+        print(f"Dropbox - Upload Operations: {dropbox.get('uploads', 0)}")
+        print(f"Dropbox - Download Operations: {dropbox.get('downloads', 0)}")
+        print(f"Dropbox - Deletion Operations: {dropbox.get('deletions', 0)}")
+        
+        uploaded_mb = dropbox.get('total_uploaded_bytes', 0) / (1024*1024)
+        print(f"Total Data Uploaded: {uploaded_mb:.2f} MB")
+        
+        significance = report.get("summary", {}).get("evidence_significance", "UNKNOWN")
+        print(f"Evidence Significance Level: {significance}")
+
+if __name__ == "__main__":
+    create_evidence_summary()
+EOF
+
+chmod +x evidence_summary.py
+python3 evidence_summary.py
+Verification and Testing
+Verify all analysis tools are working correctly:
+
+# Test database connectivity
+echo "Testing database connections..."
+sqlite3 google_drive_artifacts/sync_config.db "SELECT COUNT(*) FROM sync_items;"
+sqlite3 dropbox_artifacts/.dropbox/dropbox.db "SELECT COUNT(*) FROM file_journal;"
+
+# Verify log file analysis
+echo "Testing log file parsing..."
+grep -c "INFO\|WARN\|ERROR" dropbox_artifacts/.dropbox/logs/sync.log
+grep -c "SYNC\|UPLOAD\|DELETE" google_drive_artifacts/logs/sync_activity.log
+
+# Check generated reports
+ls -la *.json *.py
+Conclusion
+In this lab, you successfully investigated Google Drive and Dropbox remnants on disk using open-source forensic tools. You learned to:
+
+Extract cloud storage artifacts from SQLite databases and log files
+Analyze synchronization patterns and identify file operations
+Reconstruct activity timelines from multiple data sources
+Document forensic evidence with proper chain of custody considerations
+These skills are essential for digital forensics investigations involving cloud storage services. Cloud storage artifacts often persist on local systems even after files are deleted, providing valuable evidence for forensic analysis. Understanding how to locate, extract, and analyze these remnants is crucial for comprehensive digital investigations in modern computing environments.
+
+The techniques demonstrated here apply to real-world scenarios where investigators need to understand user activity patterns, recover deleted files, and establish timelines of digital evidence involving cloud storage synchronization.
