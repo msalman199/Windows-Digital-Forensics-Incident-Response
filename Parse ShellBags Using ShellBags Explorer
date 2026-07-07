@@ -1,0 +1,253 @@
+ Parse ShellBags Using ShellBags Explorer
+Learning Objectives
+By completing this lab, you will:
+
+Understand ShellBags artifacts and their forensic significance
+Use ShellBags Explorer to parse and analyze ShellBag data
+Identify folder and directory access activity from ShellBag artifacts
+Extract timeline information from user folder navigation patterns
+Prerequisites
+Basic understanding of Windows registry structure
+Familiarity with Linux command line operations
+Knowledge of digital forensics concepts
+Understanding of file system artifacts
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required tools during the lab.
+
+Task 1: Install Required Tools and Prepare Environment
+Subtask 1.1: Update System and Install Dependencies
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y wget unzip python3 python3-pip git build-essential
+Subtask 1.2: Install Wine for Windows Tool Compatibility
+sudo dpkg --add-architecture i386
+wget -nc https://dl.winehq.org/wine-builds/winehq.key
+sudo apt-key add winehq.key
+sudo add-apt-repository 'deb https://dl.winehq.org/wine-builds/ubuntu/ focal main'
+sudo apt update
+sudo apt install -y winehq-stable
+Subtask 1.3: Download ShellBags Explorer
+mkdir ~/forensics-lab
+cd ~/forensics-lab
+wget https://f001.backblazeb2.com/file/EricZimmermanTools/ShellBagsExplorer.zip
+unzip ShellBagsExplorer.zip -d shellbags-explorer/
+Subtask 1.4: Create Sample Registry Files
+# Create sample NTUSER.DAT and USRCLASS.DAT files for analysis
+mkdir ~/forensics-lab/sample-data
+cd ~/forensics-lab/sample-data
+
+# Download sample registry files (simulated ShellBag data)
+cat > create_sample_registry.py << 'EOF'
+import struct
+import os
+
+def create_sample_ntuser():
+    # Create a minimal NTUSER.DAT structure with ShellBag entries
+    header = b'regf' + b'\x00' * 508
+    with open('NTUSER.DAT', 'wb') as f:
+        f.write(header)
+        # Add sample ShellBag data
+        f.write(b'\x00' * 4096)
+
+def create_sample_usrclass():
+    # Create a minimal USRCLASS.DAT structure
+    header = b'regf' + b'\x00' * 508
+    with open('USRCLASS.DAT', 'wb') as f:
+        f.write(header)
+        f.write(b'\x00' * 4096)
+
+create_sample_ntuser()
+create_sample_usrclass()
+print("Sample registry files created successfully")
+EOF
+
+python3 create_sample_registry.py
+Task 2: Parse ShellBag Data Using ShellBags Explorer
+Subtask 2.1: Initialize Wine Environment
+winecfg
+# Select "Windows 10" from the dropdown and click OK
+Subtask 2.2: Launch ShellBags Explorer
+cd ~/forensics-lab/shellbags-explorer
+wine ShellBagsExplorer.exe
+Subtask 2.3: Load Registry Files for Analysis
+In the ShellBags Explorer interface:
+
+Click File → Load offline hive
+Navigate to /home/user/forensics-lab/sample-data/
+Select NTUSER.DAT first
+Click File → Load offline hive again
+Select USRCLASS.DAT
+Subtask 2.4: Alternative Command-Line Analysis
+# Install registry analysis tools
+sudo apt install -y python3-registry
+
+# Create Python script for ShellBag analysis
+cat > analyze_shellbags.py << 'EOF'
+#!/usr/bin/env python3
+import sys
+from Registry import Registry
+
+def analyze_shellbags(registry_path):
+    try:
+        reg = Registry.Registry(open(registry_path, 'rb'))
+        
+        # Navigate to ShellBags key
+        shellbags_key = reg.open("Software\\Microsoft\\Windows\\Shell\\BagMRU")
+        
+        print(f"Analyzing ShellBags from: {registry_path}")
+        print("=" * 50)
+        
+        for subkey in shellbags_key.subkeys():
+            print(f"Bag ID: {subkey.name()}")
+            for value in subkey.values():
+                print(f"  Value: {value.name()} = {value.value()}")
+        
+    except Exception as e:
+        print(f"Error analyzing registry: {e}")
+        print("Note: Sample files may not contain actual ShellBag data")
+
+if __name__ == "__main__":
+    analyze_shellbags("/home/user/forensics-lab/sample-data/NTUSER.DAT")
+EOF
+
+chmod +x analyze_shellbags.py
+python3 analyze_shellbags.py
+Task 3: Identify Folder and Directory Access Activity
+Subtask 3.1: Extract Timeline Information
+# Create timeline extraction script
+cat > extract_timeline.py << 'EOF'
+#!/usr/bin/env python3
+import os
+import datetime
+
+def extract_shellbag_timeline():
+    print("ShellBag Timeline Analysis")
+    print("=" * 40)
+    
+    # Simulate ShellBag timeline data
+    activities = [
+        {"timestamp": "2024-01-15 09:30:00", "path": "C:\\Users\\John\\Documents", "action": "Folder Accessed"},
+        {"timestamp": "2024-01-15 09:32:15", "path": "C:\\Users\\John\\Downloads", "action": "Folder Opened"},
+        {"timestamp": "2024-01-15 09:35:22", "path": "C:\\Users\\John\\Desktop\\Projects", "action": "Folder Created"},
+        {"timestamp": "2024-01-15 10:15:45", "path": "C:\\Users\\John\\Documents\\Reports", "action": "Folder Accessed"},
+    ]
+    
+    for activity in activities:
+        print(f"{activity['timestamp']} - {activity['action']}: {activity['path']}")
+
+extract_shellbag_timeline()
+EOF
+
+python3 extract_timeline.py
+Subtask 3.2: Analyze Folder Access Patterns
+# Create pattern analysis script
+cat > analyze_patterns.py << 'EOF'
+#!/usr/bin/env python3
+
+def analyze_access_patterns():
+    print("Folder Access Pattern Analysis")
+    print("=" * 35)
+    
+    patterns = {
+        "Most Accessed Folders": [
+            "C:\\Users\\John\\Documents (15 times)",
+            "C:\\Users\\John\\Downloads (8 times)",
+            "C:\\Users\\John\\Desktop (12 times)"
+        ],
+        "Recently Created Folders": [
+            "C:\\Users\\John\\Desktop\\Projects",
+            "C:\\Users\\John\\Documents\\NewFolder"
+        ],
+        "Suspicious Activity": [
+            "Access to system folders outside normal hours",
+            "Rapid folder creation/deletion patterns"
+        ]
+    }
+    
+    for category, items in patterns.items():
+        print(f"\n{category}:")
+        for item in items:
+            print(f"  • {item}")
+
+analyze_access_patterns()
+EOF
+
+python3 analyze_patterns.py
+Subtask 3.3: Generate Forensic Report
+# Create comprehensive report
+cat > generate_report.py << 'EOF'
+#!/usr/bin/env python3
+import datetime
+
+def generate_shellbag_report():
+    report_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    report = f"""
+ShellBag Forensic Analysis Report
+Generated: {report_time}
+{'=' * 50}
+
+EXECUTIVE SUMMARY:
+ShellBag artifacts provide valuable insight into user folder navigation
+and file system interaction patterns.
+
+KEY FINDINGS:
+1. User accessed Documents folder 15 times over analysis period
+2. New project folder created on Desktop at 09:35:22
+3. Downloads folder accessed frequently (8 times)
+4. No suspicious system folder access detected
+
+TIMELINE ANALYSIS:
+- 09:30:00: Initial Documents folder access
+- 09:32:15: Downloads folder opened
+- 09:35:22: New folder created (Projects)
+- 10:15:45: Reports subfolder accessed
+
+FORENSIC SIGNIFICANCE:
+• ShellBags persist even after folder deletion
+• Provides evidence of user activity and file organization
+• Useful for establishing user behavior patterns
+• Can reveal hidden or deleted folder structures
+
+RECOMMENDATIONS:
+1. Cross-reference with other artifacts (MFT, USN Journal)
+2. Analyze for data exfiltration patterns
+3. Check for evidence of file hiding or deletion
+4. Correlate timestamps with system events
+
+Analysis completed successfully.
+    """
+    
+    with open('/home/user/forensics-lab/shellbag_report.txt', 'w') as f:
+        f.write(report)
+    
+    print(report)
+    print(f"\nReport saved to: /home/user/forensics-lab/shellbag_report.txt")
+
+generate_shellbag_report()
+EOF
+
+python3 generate_report.py
+Subtask 3.4: Verify Analysis Results
+# Display final results
+echo "=== Lab 11 Results Summary ==="
+echo "Files created during analysis:"
+ls -la ~/forensics-lab/
+echo ""
+echo "Report contents:"
+cat ~/forensics-lab/shellbag_report.txt | head -20
+echo ""
+echo "Analysis completed successfully!"
+Verification Steps
+Confirm tool installation: Verify ShellBags Explorer and dependencies are properly installed
+Validate data parsing: Ensure registry files are loaded and parsed correctly
+Review timeline extraction: Check that folder access patterns are identified
+Examine report generation: Verify comprehensive forensic report is created
+Troubleshooting
+Wine configuration issues: Run winecfg and ensure Windows 10 compatibility mode is selected
+
+Registry parsing errors: Sample files may not contain actual ShellBag data; focus on understanding the analysis process
+
+Permission errors: Ensure proper file permissions with chmod +x for Python scripts
+
+Conclusion
+You have successfully completed ShellBag analysis using both GUI and command-line tools. This lab demonstrated how ShellBag artifacts provide crucial forensic evidence about user folder navigation patterns, file system interactions, and timeline reconstruction. ShellBags persist even after folder deletion, making them valuable for digital forensics investigations. The skills learned here are essential for incident response, forensic analysis, and understanding user behavior patterns in Windows environments.
