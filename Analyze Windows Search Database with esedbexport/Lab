@@ -1,0 +1,501 @@
+Analyze Windows Search Database with esedbexport
+Learning Objectives
+By completing this lab, you will:
+
+Extract and analyze data from Windows Search database files using esedbexport
+Understand the structure and contents of Windows Search indexing data
+Recover file metadata and search history from ESE database files
+Perform forensic analysis on Windows Search artifacts
+Prerequisites
+Basic understanding of Linux command line operations
+Familiarity with file system concepts and metadata
+Knowledge of Windows operating system file structures
+Understanding of database concepts and forensic analysis principles
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required tools during the lab exercises.
+
+Task 1: Install Required Tools and Prepare Environment
+Subtask 1.1: Install esedbexport and Dependencies
+# Update package manager
+sudo apt update
+
+# Install required packages
+sudo apt install -y build-essential autotools-dev autoconf libtool pkg-config
+
+# Download and compile libesedb
+cd /tmp
+wget https://github.com/libyal/libesedb/releases/download/20220806/libesedb-alpha-20220806.tar.gz
+tar -xzf libesedb-alpha-20220806.tar.gz
+cd libesedb-20220806
+
+# Configure and compile
+./configure
+make
+sudo make install
+sudo ldconfig
+Subtask 1.2: Create Working Directory and Download Sample Data
+# Create working directory
+mkdir -p ~/search_analysis
+cd ~/search_analysis
+
+# Create sample Windows Search database file (simulated)
+# In real scenarios, you would copy from Windows system
+mkdir -p sample_data
+
+# Download sample ESE database file
+wget -O sample_data/Windows.edb "https://github.com/libyal/libesedb/raw/main/tests/input/Windows.edb" 2>/dev/null || echo "Sample file not available - creating placeholder"
+
+# If download fails, create a placeholder structure
+if [ ! -f "sample_data/Windows.edb" ]; then
+    echo "Creating simulated Windows Search database structure..."
+    mkdir -p extracted_data
+    echo "Note: In real scenarios, copy Windows.edb from C:\ProgramData\Microsoft\Search\Data\Applications\Windows\"
+fi
+Task 2: Extract Data from Windows Search Database
+Subtask 2.1: Analyze Database Structure
+# Check if esedbexport is properly installed
+which esedbexport
+
+# Display database information
+if [ -f "sample_data/Windows.edb" ]; then
+    esedbinfo sample_data/Windows.edb
+else
+    echo "Database file not found. In real scenarios, you would analyze:"
+    echo "- C:\ProgramData\Microsoft\Search\Data\Applications\Windows\Windows.edb"
+    echo "- This contains indexed file metadata and search history"
+fi
+Subtask 2.2: Export Database Tables
+# Create output directory for extracted data
+mkdir -p extracted_data
+
+# Export all tables from the database
+if [ -f "sample_data/Windows.edb" ]; then
+    esedbexport -t extracted_data sample_data/Windows.edb
+    
+    # List extracted tables
+    echo "Extracted tables:"
+    ls -la extracted_data/
+else
+    # Create simulated table structure for demonstration
+    echo "Creating simulated Windows Search table structure..."
+    
+    # SystemIndex_0A table (main search index)
+    cat > extracted_data/SystemIndex_0A.csv << 'EOF'
+DocID,FileName,Path,Size,DateModified,FileExtension,Title,Author
+1,document1.pdf,C:\Users\John\Documents\,1024576,2023-10-15 14:30:00,.pdf,Sample Document,John Doe
+2,presentation.pptx,C:\Users\John\Desktop\,2048000,2023-10-14 09:15:00,.pptx,Project Presentation,Jane Smith
+3,report.docx,C:\Users\John\Documents\Reports\,512000,2023-10-13 16:45:00,.docx,Monthly Report,John Doe
+4,image.jpg,C:\Users\John\Pictures\,3145728,2023-10-12 11:20:00,.jpg,Vacation Photo,
+5,spreadsheet.xlsx,C:\Users\John\Documents\,1536000,2023-10-11 13:10:00,.xlsx,Budget Analysis,Finance Team
+EOF
+
+    # SystemIndex_Gthr table (gatherer information)
+    cat > extracted_data/SystemIndex_Gthr.csv << 'EOF'
+GatherID,ProjectID,LastCrawlTime,Status,ItemsProcessed
+1,1,2023-10-15 18:00:00,Completed,1247
+2,2,2023-10-15 17:30:00,Completed,892
+3,3,2023-10-15 17:00:00,In Progress,456
+EOF
+
+    echo "Simulated tables created successfully."
+fi
+Subtask 2.3: Export Specific Tables of Interest
+# Focus on key tables for forensic analysis
+echo "Analyzing key Windows Search tables..."
+
+# SystemIndex_0A - Main file index
+if [ -f "extracted_data/SystemIndex_0A.csv" ]; then
+    echo "=== SystemIndex_0A Analysis ==="
+    echo "This table contains indexed file metadata:"
+    head -10 extracted_data/SystemIndex_0A.csv
+    echo ""
+    echo "Total indexed files: $(wc -l < extracted_data/SystemIndex_0A.csv)"
+fi
+
+# Create analysis script
+cat > analyze_search_data.py << 'EOF'
+#!/usr/bin/env python3
+import csv
+import os
+from datetime import datetime
+
+def analyze_search_index(csv_file):
+    if not os.path.exists(csv_file):
+        print(f"File {csv_file} not found")
+        return
+    
+    print(f"Analyzing {csv_file}...")
+    
+    file_types = {}
+    total_size = 0
+    recent_files = []
+    
+    with open(csv_file, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # Count file types
+            ext = row.get('FileExtension', '').lower()
+            file_types[ext] = file_types.get(ext, 0) + 1
+            
+            # Calculate total size
+            try:
+                size = int(row.get('Size', 0))
+                total_size += size
+            except:
+                pass
+            
+            # Track recent files
+            recent_files.append({
+                'name': row.get('FileName', ''),
+                'path': row.get('Path', ''),
+                'modified': row.get('DateModified', ''),
+                'size': row.get('Size', 0)
+            })
+    
+    print(f"\n=== File Type Distribution ===")
+    for ext, count in sorted(file_types.items(), key=lambda x: x[1], reverse=True):
+        print(f"{ext or 'No extension'}: {count} files")
+    
+    print(f"\nTotal indexed size: {total_size:,} bytes ({total_size/1024/1024:.2f} MB)")
+    
+    print(f"\n=== Recent Files (Last 5) ===")
+    for file_info in recent_files[-5:]:
+        print(f"File: {file_info['name']}")
+        print(f"Path: {file_info['path']}")
+        print(f"Modified: {file_info['modified']}")
+        print(f"Size: {file_info['size']} bytes")
+        print("-" * 40)
+
+if __name__ == "__main__":
+    analyze_search_index("extracted_data/SystemIndex_0A.csv")
+EOF
+
+# Make script executable and run
+chmod +x analyze_search_data.py
+python3 analyze_search_data.py
+Task 3: Review File Metadata and Indexing Data
+Subtask 3.1: Analyze File Metadata
+# Create detailed metadata analysis
+cat > metadata_analysis.sh << 'EOF'
+#!/bin/bash
+
+echo "=== Windows Search Database Analysis ==="
+echo "Date: $(date)"
+echo ""
+
+# Analyze SystemIndex_0A table
+if [ -f "extracted_data/SystemIndex_0A.csv" ]; then
+    echo "=== File Metadata Analysis ==="
+    
+    # Count total files
+    total_files=$(tail -n +2 extracted_data/SystemIndex_0A.csv | wc -l)
+    echo "Total indexed files: $total_files"
+    
+    # Analyze file extensions
+    echo ""
+    echo "=== File Type Distribution ==="
+    tail -n +2 extracted_data/SystemIndex_0A.csv | cut -d',' -f6 | sort | uniq -c | sort -nr | head -10
+    
+    # Find largest files
+    echo ""
+    echo "=== Largest Files ==="
+    tail -n +2 extracted_data/SystemIndex_0A.csv | sort -t',' -k4 -nr | head -5 | while IFS=',' read -r docid filename path size modified ext title author; do
+        echo "File: $filename"
+        echo "Size: $size bytes"
+        echo "Path: $path"
+        echo "Modified: $modified"
+        echo "---"
+    done
+    
+    # Search for specific file types
+    echo ""
+    echo "=== Document Files (.pdf, .docx, .txt) ==="
+    tail -n +2 extracted_data/SystemIndex_0A.csv | grep -E '\.(pdf|docx|txt),' | cut -d',' -f2,3,7 | head -10
+    
+    # Search for executable files
+    echo ""
+    echo "=== Executable Files ==="
+    tail -n +2 extracted_data/SystemIndex_0A.csv | grep -E '\.(exe|msi|bat),' | cut -d',' -f2,3 | head -5
+fi
+
+# Analyze gatherer information
+if [ -f "extracted_data/SystemIndex_Gthr.csv" ]; then
+    echo ""
+    echo "=== Search Gatherer Information ==="
+    cat extracted_data/SystemIndex_Gthr.csv
+fi
+
+echo ""
+echo "=== Analysis Complete ==="
+EOF
+
+chmod +x metadata_analysis.sh
+./metadata_analysis.sh
+Subtask 3.2: Search for Specific Artifacts
+# Create forensic search script
+cat > forensic_search.py << 'EOF'
+#!/usr/bin/env python3
+import csv
+import re
+import os
+
+def search_artifacts(csv_file, search_terms):
+    """Search for specific artifacts in the Windows Search database"""
+    
+    if not os.path.exists(csv_file):
+        print(f"File {csv_file} not found")
+        return
+    
+    print("=== Forensic Artifact Search ===")
+    
+    findings = []
+    
+    with open(csv_file, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            filename = row.get('FileName', '').lower()
+            path = row.get('Path', '').lower()
+            title = row.get('Title', '').lower()
+            
+            # Search for terms
+            for term in search_terms:
+                if (term.lower() in filename or 
+                    term.lower() in path or 
+                    term.lower() in title):
+                    
+                    findings.append({
+                        'term': term,
+                        'filename': row.get('FileName', ''),
+                        'path': row.get('Path', ''),
+                        'size': row.get('Size', ''),
+                        'modified': row.get('DateModified', ''),
+                        'title': row.get('Title', '')
+                    })
+    
+    # Display findings
+    for finding in findings:
+        print(f"\nFound: '{finding['term']}'")
+        print(f"File: {finding['filename']}")
+        print(f"Path: {finding['path']}")
+        print(f"Title: {finding['title']}")
+        print(f"Size: {finding['size']} bytes")
+        print(f"Modified: {finding['modified']}")
+        print("-" * 50)
+    
+    print(f"\nTotal artifacts found: {len(findings)}")
+
+def analyze_user_activity(csv_file):
+    """Analyze user activity patterns"""
+    
+    if not os.path.exists(csv_file):
+        return
+    
+    print("\n=== User Activity Analysis ===")
+    
+    paths = {}
+    authors = {}
+    
+    with open(csv_file, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # Analyze paths for user activity
+            path = row.get('Path', '')
+            if 'Users' in path:
+                user_path = path.split('Users')[1].split('\\')[1] if '\\' in path.split('Users')[1] else 'Unknown'
+                paths[user_path] = paths.get(user_path, 0) + 1
+            
+            # Analyze authors
+            author = row.get('Author', '').strip()
+            if author:
+                authors[author] = authors.get(author, 0) + 1
+    
+    print("User Activity by Path:")
+    for user, count in sorted(paths.items(), key=lambda x: x[1], reverse=True):
+        print(f"  {user}: {count} files")
+    
+    print("\nDocument Authors:")
+    for author, count in sorted(authors.items(), key=lambda x: x[1], reverse=True)[:10]:
+        print(f"  {author}: {count} documents")
+
+if __name__ == "__main__":
+    # Define search terms for forensic analysis
+    search_terms = [
+        "password", "confidential", "secret", "private",
+        "budget", "financial", "report", "presentation"
+    ]
+    
+    search_artifacts("extracted_data/SystemIndex_0A.csv", search_terms)
+    analyze_user_activity("extracted_data/SystemIndex_0A.csv")
+EOF
+
+python3 forensic_search.py
+Subtask 3.3: Generate Forensic Report
+# Create comprehensive forensic report
+cat > generate_report.sh << 'EOF'
+#!/bin/bash
+
+REPORT_FILE="windows_search_analysis_report.txt"
+
+echo "Windows Search Database Forensic Analysis Report" > $REPORT_FILE
+echo "Generated: $(date)" >> $REPORT_FILE
+echo "Analyst: Lab Student" >> $REPORT_FILE
+echo "=================================================" >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# Database information
+echo "DATABASE INFORMATION:" >> $REPORT_FILE
+echo "- Source: Windows Search Database (Windows.edb)" >> $REPORT_FILE
+echo "- Location: C:\\ProgramData\\Microsoft\\Search\\Data\\Applications\\Windows\\" >> $REPORT_FILE
+echo "- Analysis Tool: esedbexport (libesedb)" >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# File statistics
+if [ -f "extracted_data/SystemIndex_0A.csv" ]; then
+    total_files=$(tail -n +2 extracted_data/SystemIndex_0A.csv | wc -l)
+    echo "INDEXED FILES SUMMARY:" >> $REPORT_FILE
+    echo "- Total indexed files: $total_files" >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    echo "FILE TYPE DISTRIBUTION:" >> $REPORT_FILE
+    tail -n +2 extracted_data/SystemIndex_0A.csv | cut -d',' -f6 | sort | uniq -c | sort -nr | head -10 >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    echo "RECENT FILE ACTIVITY:" >> $REPORT_FILE
+    echo "Files modified in the last analysis:" >> $REPORT_FILE
+    tail -n +2 extracted_data/SystemIndex_0A.csv | tail -5 | while IFS=',' read -r docid filename path size modified ext title author; do
+        echo "- $filename ($path) - Modified: $modified" >> $REPORT_FILE
+    done
+fi
+
+echo "" >> $REPORT_FILE
+echo "FORENSIC SIGNIFICANCE:" >> $REPORT_FILE
+echo "- Windows Search database contains comprehensive file metadata" >> $REPORT_FILE
+echo "- Reveals user file access patterns and document creation history" >> $REPORT_FILE
+echo "- Can recover information about deleted or moved files" >> $REPORT_FILE
+echo "- Provides timeline of file system activity" >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+echo "RECOMMENDATIONS:" >> $REPORT_FILE
+echo "- Cross-reference findings with file system timeline analysis" >> $REPORT_FILE
+echo "- Examine specific files of interest identified in the index" >> $REPORT_FILE
+echo "- Correlate with user activity logs and browser history" >> $REPORT_FILE
+echo "- Consider analyzing Windows Search query logs if available" >> $REPORT_FILE
+
+echo "Report generated: $REPORT_FILE"
+cat $REPORT_FILE
+EOF
+
+chmod +x generate_report.sh
+./generate_report.sh
+Task 4: Verify Analysis Results
+Subtask 4.1: Validate Extracted Data
+# Verify the integrity and completeness of extracted data
+echo "=== Data Validation ==="
+
+# Check extracted files
+echo "Extracted table files:"
+ls -la extracted_data/
+
+# Validate CSV format
+echo ""
+echo "Validating CSV format..."
+for csv_file in extracted_data/*.csv; do
+    if [ -f "$csv_file" ]; then
+        echo "File: $(basename $csv_file)"
+        echo "  Lines: $(wc -l < $csv_file)"
+        echo "  Columns: $(head -1 $csv_file | tr ',' '\n' | wc -l)"
+        echo "  Sample header: $(head -1 $csv_file)"
+        echo ""
+    fi
+done
+
+# Check for common forensic artifacts
+echo "=== Forensic Artifact Summary ==="
+if [ -f "extracted_data/SystemIndex_0A.csv" ]; then
+    echo "Document files found: $(grep -c '\.\(pdf\|docx\|txt\|pptx\|xlsx\),' extracted_data/SystemIndex_0A.csv)"
+    echo "Image files found: $(grep -c '\.\(jpg\|png\|gif\|bmp\),' extracted_data/SystemIndex_0A.csv)"
+    echo "Executable files found: $(grep -c '\.\(exe\|msi\|bat\),' extracted_data/SystemIndex_0A.csv)"
+fi
+Subtask 4.2: Create Timeline Analysis
+# Generate timeline of file activity
+cat > timeline_analysis.py << 'EOF'
+#!/usr/bin/env python3
+import csv
+import os
+from datetime import datetime
+from collections import defaultdict
+
+def create_timeline(csv_file):
+    """Create a timeline of file activity from Windows Search data"""
+    
+    if not os.path.exists(csv_file):
+        print(f"File {csv_file} not found")
+        return
+    
+    print("=== File Activity Timeline ===")
+    
+    timeline = []
+    
+    with open(csv_file, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            modified = row.get('DateModified', '')
+            filename = row.get('FileName', '')
+            path = row.get('Path', '')
+            size = row.get('Size', '0')
+            
+            if modified and filename:
+                timeline.append({
+                    'timestamp': modified,
+                    'filename': filename,
+                    'path': path,
+                    'size': size,
+                    'action': 'Modified'
+                })
+    
+    # Sort by timestamp
+    timeline.sort(key=lambda x: x['timestamp'])
+    
+    # Display timeline
+    print(f"Timeline entries: {len(timeline)}")
+    print("\nRecent Activity (Last 10 entries):")
+    print("-" * 80)
+    
+    for entry in timeline[-10:]:
+        print(f"Time: {entry['timestamp']}")
+        print(f"Action: {entry['action']}")
+        print(f"File: {entry['filename']}")
+        print(f"Path: {entry['path']}")
+        print(f"Size: {entry['size']} bytes")
+        print("-" * 40)
+    
+    # Activity by day
+    daily_activity = defaultdict(int)
+    for entry in timeline:
+        try:
+            date = entry['timestamp'].split(' ')[0]
+            daily_activity[date] += 1
+        except:
+            pass
+    
+    print(f"\n=== Daily Activity Summary ===")
+    for date, count in sorted(daily_activity.items())[-7:]:  # Last 7 days
+        print(f"{date}: {count} file modifications")
+
+if __name__ == "__main__":
+    create_timeline("extracted_data/SystemIndex_0A.csv")
+EOF
+
+python3 timeline_analysis.py
+Conclusion
+In this lab, you successfully:
+
+Installed and configured esedbexport to analyze Windows Search database files
+Extracted structured data from ESE database format into readable CSV files
+Analyzed file metadata including names, paths, sizes, modification dates, and document properties
+Performed forensic searches for specific artifacts and user activity patterns
+Generated comprehensive reports documenting findings and forensic significance
+Created timeline analysis to understand file system activity patterns
+Forensic Significance: The Windows Search database is a critical artifact in digital forensics, containing comprehensive metadata about files that have been indexed by the Windows Search service. This information can reveal user activity patterns, document creation timelines, and evidence of files that may have been deleted or moved. The ability to extract and analyze this data provides investigators with valuable insights into system usage and file access patterns.
+
+Real-World Applications: This analysis technique is commonly used in digital forensics investigations, incident response scenarios, and compliance audits where understanding file system activity and user behavior is crucial for the investigation.
