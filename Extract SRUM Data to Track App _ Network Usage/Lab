@@ -1,0 +1,501 @@
+ Extract SRUM Data to Track App & Network Usage
+Learning Objectives
+By completing this lab, you will:
+
+Extract SRUM (System Resource Usage Monitor) data from Windows systems using open-source tools
+Analyze application and network usage patterns from SRUM databases
+Understand the forensic value of SRUM data for digital investigations
+Parse and interpret SRUM artifacts to track user activity
+Prerequisites
+Basic understanding of Windows forensics concepts
+Familiarity with Linux command line operations
+Knowledge of database structures and SQL queries
+Understanding of digital forensic investigation principles
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required tools during the lab exercises.
+
+Task 1: Set Up SRUM Analysis Environment
+Subtask 1.1: Install Required Tools
+Install Python and essential forensic tools:
+
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y python3 python3-pip git wget unzip
+sudo apt install -y sqlite3 hexdump file
+Install Python libraries for SRUM analysis:
+
+pip3 install --user python-registry construct
+pip3 install --user pytsk3 pyewf
+Subtask 1.2: Download SRUM Analysis Tools
+Clone the SRUM analysis toolkit:
+
+cd ~
+git clone https://github.com/MarkBaggett/srum-dump.git
+cd srum-dump
+chmod +x srum_dump.py
+Download additional SRUM parsing tools:
+
+wget https://raw.githubusercontent.com/sans-dfir/srum-dump/master/SRUM_TEMPLATE.xlsx
+Subtask 1.3: Create Sample SRUM Data
+Create a sample SRUM database for analysis:
+
+mkdir -p ~/srum-lab/evidence
+cd ~/srum-lab/evidence
+
+# Create a sample SRUDB.dat file structure
+cat > create_sample_srum.py << 'EOF'
+import sqlite3
+import os
+from datetime import datetime, timedelta
+
+# Create sample SRUM database
+conn = sqlite3.connect('SRUDB.dat')
+cursor = conn.cursor()
+
+# Create Application Resource Usage table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS SruDbIdMapTable (
+    IdType INTEGER,
+    IdIndex INTEGER,
+    IdBlob BLOB,
+    PRIMARY KEY (IdType, IdIndex)
+)
+''')
+
+# Create Network Usage table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS {D10CA2FE-6FCF-4F6D-848E-B2E99266FA89} (
+    AutoIncId INTEGER PRIMARY KEY,
+    TimeStamp DATETIME,
+    AppId INTEGER,
+    UserId INTEGER,
+    InterfaceLuid INTEGER,
+    L2ProfileId INTEGER,
+    BytesSent INTEGER,
+    BytesRecvd INTEGER,
+    L2ProfileFlags INTEGER
+)
+''')
+
+# Create Application Usage table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS {D10CA2FE-6FCF-4F6D-848E-B2E99266FA86} (
+    AutoIncId INTEGER PRIMARY KEY,
+    TimeStamp DATETIME,
+    AppId INTEGER,
+    UserId INTEGER,
+    ForegroundCycleTime INTEGER,
+    BackgroundCycleTime INTEGER,
+    FaceTime INTEGER,
+    ForegroundContextSwitches INTEGER,
+    BackgroundContextSwitches INTEGER,
+    ForegroundBytesRead INTEGER,
+    ForegroundBytesWritten INTEGER,
+    ForegroundNumReadOps INTEGER,
+    ForegroundNumWriteOps INTEGER,
+    ForegroundNumberOfFlushes INTEGER,
+    BackgroundBytesRead INTEGER,
+    BackgroundBytesWritten INTEGER,
+    BackgroundNumReadOps INTEGER,
+    BackgroundNumWriteOps INTEGER,
+    BackgroundNumberOfFlushes INTEGER
+)
+''')
+
+# Insert sample application mappings
+apps = [
+    (3, 1, b'chrome.exe'),
+    (3, 2, b'firefox.exe'),
+    (3, 3, b'notepad.exe'),
+    (3, 4, b'cmd.exe'),
+    (3, 5, b'powershell.exe')
+]
+
+for app in apps:
+    cursor.execute('INSERT INTO SruDbIdMapTable VALUES (?, ?, ?)', app)
+
+# Insert sample network usage data
+base_time = datetime.now() - timedelta(days=7)
+for i in range(50):
+    timestamp = base_time + timedelta(hours=i)
+    cursor.execute('''
+    INSERT INTO "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}" 
+    (TimeStamp, AppId, UserId, InterfaceLuid, L2ProfileId, BytesSent, BytesRecvd, L2ProfileFlags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (timestamp, (i % 5) + 1, 1001, 123456, 1, 
+          1000 + (i * 100), 5000 + (i * 500), 0))
+
+# Insert sample application usage data
+for i in range(30):
+    timestamp = base_time + timedelta(hours=i * 2)
+    cursor.execute('''
+    INSERT INTO "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA86}"
+    (TimeStamp, AppId, UserId, ForegroundCycleTime, BackgroundCycleTime, FaceTime,
+     ForegroundContextSwitches, BackgroundContextSwitches, ForegroundBytesRead,
+     ForegroundBytesWritten, ForegroundNumReadOps, ForegroundNumWriteOps,
+     ForegroundNumberOfFlushes, BackgroundBytesRead, BackgroundBytesWritten,
+     BackgroundNumReadOps, BackgroundNumWriteOps, BackgroundNumberOfFlushes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (timestamp, (i % 5) + 1, 1001, 15000000, 5000000, 10000000,
+          1000, 500, 1048576, 524288, 100, 50, 10,
+          2097152, 1048576, 200, 100, 20))
+
+conn.commit()
+conn.close()
+print("Sample SRUM database created successfully!")
+EOF
+
+python3 create_sample_srum.py
+Task 2: Extract and Parse SRUM Data
+Subtask 2.1: Analyze SRUM Database Structure
+Examine the SRUM database structure:
+
+cd ~/srum-lab/evidence
+sqlite3 SRUDB.dat ".tables"
+sqlite3 SRUDB.dat ".schema"
+View application ID mappings:
+
+sqlite3 SRUDB.dat "SELECT * FROM SruDbIdMapTable WHERE IdType = 3;"
+Subtask 2.2: Extract Network Usage Data
+Create a script to extract network usage patterns:
+
+cat > extract_network_usage.py << 'EOF'
+import sqlite3
+import csv
+from datetime import datetime
+
+def extract_network_usage(db_path):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Get application mappings
+    app_map = {}
+    cursor.execute("SELECT IdIndex, IdBlob FROM SruDbIdMapTable WHERE IdType = 3")
+    for row in cursor.fetchall():
+        app_map[row[0]] = row[1].decode('utf-8', errors='ignore').rstrip('\x00')
+    
+    # Extract network usage data
+    query = '''
+    SELECT TimeStamp, AppId, BytesSent, BytesRecvd, InterfaceLuid
+    FROM "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}"
+    ORDER BY TimeStamp DESC
+    '''
+    
+    cursor.execute(query)
+    results = cursor.fetchall()
+    
+    # Write to CSV
+    with open('network_usage.csv', 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['Timestamp', 'Application', 'Bytes Sent', 'Bytes Received', 'Interface', 'Total Traffic'])
+        
+        for row in results:
+            timestamp, app_id, bytes_sent, bytes_recv, interface = row
+            app_name = app_map.get(app_id, f'Unknown App ID {app_id}')
+            total_traffic = bytes_sent + bytes_recv
+            
+            writer.writerow([timestamp, app_name, bytes_sent, bytes_recv, interface, total_traffic])
+    
+    conn.close()
+    print(f"Network usage data extracted to network_usage.csv ({len(results)} records)")
+    
+    # Display top network consumers
+    print("\nTop Network Consumers:")
+    app_totals = {}
+    for row in results:
+        app_id = row[1]
+        app_name = app_map.get(app_id, f'Unknown App ID {app_id}')
+        total = row[2] + row[3]  # bytes_sent + bytes_recv
+        app_totals[app_name] = app_totals.get(app_name, 0) + total
+    
+    for app, total in sorted(app_totals.items(), key=lambda x: x[1], reverse=True)[:5]:
+        print(f"  {app}: {total:,} bytes")
+
+if __name__ == "__main__":
+    extract_network_usage('SRUDB.dat')
+EOF
+
+python3 extract_network_usage.py
+Subtask 2.3: Extract Application Usage Data
+Create a script to analyze application usage patterns:
+
+cat > extract_app_usage.py << 'EOF'
+import sqlite3
+import csv
+from datetime import datetime
+
+def extract_app_usage(db_path):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Get application mappings
+    app_map = {}
+    cursor.execute("SELECT IdIndex, IdBlob FROM SruDbIdMapTable WHERE IdType = 3")
+    for row in cursor.fetchall():
+        app_map[row[0]] = row[1].decode('utf-8', errors='ignore').rstrip('\x00')
+    
+    # Extract application usage data
+    query = '''
+    SELECT TimeStamp, AppId, ForegroundCycleTime, BackgroundCycleTime, 
+           FaceTime, ForegroundBytesRead, ForegroundBytesWritten
+    FROM "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA86}"
+    ORDER BY TimeStamp DESC
+    '''
+    
+    cursor.execute(query)
+    results = cursor.fetchall()
+    
+    # Write to CSV
+    with open('app_usage.csv', 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['Timestamp', 'Application', 'Foreground Time (ms)', 
+                        'Background Time (ms)', 'Face Time (ms)', 
+                        'Bytes Read', 'Bytes Written', 'Total CPU Time'])
+        
+        for row in results:
+            timestamp, app_id, fg_time, bg_time, face_time, bytes_read, bytes_written = row
+            app_name = app_map.get(app_id, f'Unknown App ID {app_id}')
+            total_cpu = fg_time + bg_time
+            
+            writer.writerow([timestamp, app_name, fg_time, bg_time, face_time, 
+                           bytes_read, bytes_written, total_cpu])
+    
+    conn.close()
+    print(f"Application usage data extracted to app_usage.csv ({len(results)} records)")
+    
+    # Display most active applications
+    print("\nMost Active Applications (by CPU time):")
+    app_totals = {}
+    for row in results:
+        app_id = row[1]
+        app_name = app_map.get(app_id, f'Unknown App ID {app_id}')
+        total_cpu = row[2] + row[3]  # fg_time + bg_time
+        app_totals[app_name] = app_totals.get(app_name, 0) + total_cpu
+    
+    for app, total in sorted(app_totals.items(), key=lambda x: x[1], reverse=True)[:5]:
+        print(f"  {app}: {total:,} ms CPU time")
+
+if __name__ == "__main__":
+    extract_app_usage('SRUDB.dat')
+EOF
+
+python3 extract_app_usage.py
+Task 3: Analyze Usage Patterns and Generate Reports
+Subtask 3.1: Create Timeline Analysis
+Generate a comprehensive timeline of user activity:
+
+cat > timeline_analysis.py << 'EOF'
+import sqlite3
+import csv
+from datetime import datetime
+from collections import defaultdict
+
+def create_timeline(db_path):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Get application mappings
+    app_map = {}
+    cursor.execute("SELECT IdIndex, IdBlob FROM SruDbIdMapTable WHERE IdType = 3")
+    for row in cursor.fetchall():
+        app_map[row[0]] = row[1].decode('utf-8', errors='ignore').rstrip('\x00')
+    
+    timeline_events = []
+    
+    # Get network events
+    cursor.execute('''
+    SELECT TimeStamp, AppId, BytesSent, BytesRecvd
+    FROM "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}"
+    WHERE BytesSent > 0 OR BytesRecvd > 0
+    ''')
+    
+    for row in cursor.fetchall():
+        timestamp, app_id, bytes_sent, bytes_recv = row
+        app_name = app_map.get(app_id, f'Unknown App ID {app_id}')
+        timeline_events.append({
+            'timestamp': timestamp,
+            'type': 'Network Activity',
+            'application': app_name,
+            'details': f'Sent: {bytes_sent} bytes, Received: {bytes_recv} bytes'
+        })
+    
+    # Get application events
+    cursor.execute('''
+    SELECT TimeStamp, AppId, ForegroundCycleTime, FaceTime
+    FROM "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA86}"
+    WHERE ForegroundCycleTime > 0
+    ''')
+    
+    for row in cursor.fetchall():
+        timestamp, app_id, fg_time, face_time = row
+        app_name = app_map.get(app_id, f'Unknown App ID {app_id}')
+        timeline_events.append({
+            'timestamp': timestamp,
+            'type': 'Application Usage',
+            'application': app_name,
+            'details': f'Foreground: {fg_time} ms, Face time: {face_time} ms'
+        })
+    
+    # Sort by timestamp
+    timeline_events.sort(key=lambda x: x['timestamp'])
+    
+    # Write timeline to CSV
+    with open('activity_timeline.csv', 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['Timestamp', 'Event Type', 'Application', 'Details'])
+        
+        for event in timeline_events:
+            writer.writerow([event['timestamp'], event['type'], 
+                           event['application'], event['details']])
+    
+    conn.close()
+    print(f"Activity timeline created with {len(timeline_events)} events")
+    
+    # Show recent activity
+    print("\nRecent Activity (last 10 events):")
+    for event in timeline_events[-10:]:
+        print(f"  {event['timestamp']} - {event['type']}: {event['application']}")
+
+if __name__ == "__main__":
+    create_timeline('SRUDB.dat')
+EOF
+
+python3 timeline_analysis.py
+Subtask 3.2: Generate Usage Statistics
+Create comprehensive usage statistics:
+
+cat > usage_statistics.py << 'EOF'
+import sqlite3
+from collections import defaultdict
+import json
+
+def generate_statistics(db_path):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Get application mappings
+    app_map = {}
+    cursor.execute("SELECT IdIndex, IdBlob FROM SruDbIdMapTable WHERE IdType = 3")
+    for row in cursor.fetchall():
+        app_map[row[0]] = row[1].decode('utf-8', errors='ignore').rstrip('\x00')
+    
+    stats = {
+        'network_stats': defaultdict(lambda: {'bytes_sent': 0, 'bytes_received': 0, 'sessions': 0}),
+        'app_stats': defaultdict(lambda: {'total_cpu_time': 0, 'foreground_time': 0, 'sessions': 0}),
+        'summary': {}
+    }
+    
+    # Network statistics
+    cursor.execute('''
+    SELECT AppId, SUM(BytesSent), SUM(BytesRecvd), COUNT(*)
+    FROM "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}"
+    GROUP BY AppId
+    ''')
+    
+    total_network_traffic = 0
+    for row in cursor.fetchall():
+        app_id, bytes_sent, bytes_recv, sessions = row
+        app_name = app_map.get(app_id, f'Unknown App ID {app_id}')
+        stats['network_stats'][app_name]['bytes_sent'] = bytes_sent
+        stats['network_stats'][app_name]['bytes_received'] = bytes_recv
+        stats['network_stats'][app_name]['sessions'] = sessions
+        total_network_traffic += bytes_sent + bytes_recv
+    
+    # Application statistics
+    cursor.execute('''
+    SELECT AppId, SUM(ForegroundCycleTime + BackgroundCycleTime), 
+           SUM(ForegroundCycleTime), COUNT(*)
+    FROM "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA86}"
+    GROUP BY AppId
+    ''')
+    
+    total_cpu_time = 0
+    for row in cursor.fetchall():
+        app_id, total_cpu, fg_time, sessions = row
+        app_name = app_map.get(app_id, f'Unknown App ID {app_id}')
+        stats['app_stats'][app_name]['total_cpu_time'] = total_cpu
+        stats['app_stats'][app_name]['foreground_time'] = fg_time
+        stats['app_stats'][app_name]['sessions'] = sessions
+        total_cpu_time += total_cpu
+    
+    # Summary statistics
+    stats['summary'] = {
+        'total_applications': len(app_map),
+        'total_network_traffic_bytes': total_network_traffic,
+        'total_cpu_time_ms': total_cpu_time,
+        'most_network_intensive': max(stats['network_stats'].items(), 
+                                    key=lambda x: x[1]['bytes_sent'] + x[1]['bytes_received'])[0] if stats['network_stats'] else 'None',
+        'most_cpu_intensive': max(stats['app_stats'].items(), 
+                                key=lambda x: x[1]['total_cpu_time'])[0] if stats['app_stats'] else 'None'
+    }
+    
+    # Save to JSON
+    with open('usage_statistics.json', 'w') as f:
+        json.dump(stats, f, indent=2, default=str)
+    
+    conn.close()
+    
+    # Display summary
+    print("SRUM Usage Statistics Summary")
+    print("=" * 40)
+    print(f"Total Applications Tracked: {stats['summary']['total_applications']}")
+    print(f"Total Network Traffic: {stats['summary']['total_network_traffic_bytes']:,} bytes")
+    print(f"Total CPU Time: {stats['summary']['total_cpu_time_ms']:,} ms")
+    print(f"Most Network Intensive App: {stats['summary']['most_network_intensive']}")
+    print(f"Most CPU Intensive App: {stats['summary']['most_cpu_intensive']}")
+    
+    print("\nTop 3 Network Users:")
+    network_sorted = sorted(stats['network_stats'].items(), 
+                          key=lambda x: x[1]['bytes_sent'] + x[1]['bytes_received'], 
+                          reverse=True)[:3]
+    for app, data in network_sorted:
+        total_traffic = data['bytes_sent'] + data['bytes_received']
+        print(f"  {app}: {total_traffic:,} bytes ({data['sessions']} sessions)")
+    
+    print("\nTop 3 CPU Users:")
+    cpu_sorted = sorted(stats['app_stats'].items(), 
+                       key=lambda x: x[1]['total_cpu_time'], 
+                       reverse=True)[:3]
+    for app, data in cpu_sorted:
+        print(f"  {app}: {data['total_cpu_time']:,} ms ({data['sessions']} sessions)")
+
+if __name__ == "__main__":
+    generate_statistics('SRUDB.dat')
+EOF
+
+python3 usage_statistics.py
+Subtask 3.3: View Generated Reports
+Examine the extracted data and reports:
+
+# View CSV files
+echo "Network Usage Data:"
+head -10 network_usage.csv
+
+echo -e "\nApplication Usage Data:"
+head -10 app_usage.csv
+
+echo -e "\nActivity Timeline:"
+head -10 activity_timeline.csv
+
+# View JSON statistics
+echo -e "\nUsage Statistics:"
+cat usage_statistics.json | head -20
+Verification and Analysis
+Verify your SRUM analysis results:
+
+# Count total records extracted
+echo "Total network usage records: $(wc -l < network_usage.csv)"
+echo "Total application usage records: $(wc -l < app_usage.csv)"
+echo "Total timeline events: $(wc -l < activity_timeline.csv)"
+
+# Check for data integrity
+sqlite3 SRUDB.dat "SELECT COUNT(*) as 'Network Records' FROM \"{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}\";"
+sqlite3 SRUDB.dat "SELECT COUNT(*) as 'App Records' FROM \"{D10CA2FE-6FCF-4F6D-848E-B2E99266FA86}\";"
+Conclusion
+You have successfully completed the SRUM data extraction and analysis lab. You learned to:
+
+Extract SRUM databases from Windows systems using open-source tools
+Parse network usage data to identify application traffic patterns
+Analyze application usage to understand user behavior and system activity
+Create comprehensive timelines of user activity for forensic investigation
+Generate statistical reports to summarize usage patterns
+SRUM data provides valuable forensic evidence for tracking application usage, network activity, and user behavior patterns. This information is crucial for digital forensic investigations, incident response, and security analysis. The techniques you practiced enable forensic analysts to reconstruct user activity timelines and identify suspicious or unauthorized application usage on Windows systems.
