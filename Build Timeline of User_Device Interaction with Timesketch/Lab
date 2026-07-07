@@ -1,0 +1,211 @@
+ Build Timeline of User/Device Interaction with Timesketch
+Learning Objectives
+By completing this lab, you will:
+
+Extract device interaction data from Autopsy forensic analysis
+Install and configure Timesketch for timeline analysis
+Import forensic data into Timesketch
+Build comprehensive timelines of user and device interactions
+Analyze timeline data to identify patterns and suspicious activities
+Prerequisites
+Basic understanding of Linux command line operations
+Familiarity with digital forensics concepts
+Knowledge of file system structures
+Understanding of log file formats
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required software during the lab.
+
+Task 1: Extract Device Interaction Data from Autopsy
+Subtask 1.1: Install Autopsy
+# Update system packages
+sudo apt update && sudo apt upgrade -y
+
+# Install Java (required for Autopsy)
+sudo apt install openjdk-11-jdk -y
+
+# Download and install Autopsy
+wget https://github.com/sleuthkit/autopsy/releases/download/autopsy-4.20.0/autopsy-4.20.0.zip
+unzip autopsy-4.20.0.zip
+cd autopsy-4.20.0
+Subtask 1.2: Create Sample Forensic Data
+# Create a sample disk image for analysis
+mkdir ~/forensic_data
+cd ~/forensic_data
+
+# Create a sample file system with user activity
+dd if=/dev/zero of=sample_disk.img bs=1M count=100
+mkfs.ext4 sample_disk.img
+
+# Mount and populate with sample data
+mkdir mount_point
+sudo mount -o loop sample_disk.img mount_point
+
+# Create sample user activity files
+sudo mkdir -p mount_point/home/user1/{Documents,Downloads,Desktop}
+sudo touch mount_point/home/user1/Documents/report.txt
+sudo touch mount_point/home/user1/Downloads/software.zip
+echo "Sample web history" | sudo tee mount_point/home/user1/.bash_history
+
+# Create system logs
+sudo mkdir -p mount_point/var/log
+echo "$(date): User login event" | sudo tee mount_point/var/log/auth.log
+echo "$(date): File access event" | sudo tee mount_point/var/log/syslog
+
+sudo umount mount_point
+Subtask 1.3: Analyze with Autopsy
+# Start Autopsy
+cd ~/autopsy-4.20.0/bin
+./autopsy
+
+# Note: Autopsy will start on localhost:9999
+# Access via web browser at http://localhost:9999
+Manual Steps in Autopsy Web Interface:
+
+Create new case named "UserDeviceTimeline"
+Add data source: select the sample_disk.img file
+Run ingest modules: File Type Identification, Hash Lookup, Keyword Search
+Export timeline data to CSV format from the Timeline view
+Subtask 1.4: Export Timeline Data
+# Create export directory
+mkdir ~/timeline_exports
+
+# Export data from Autopsy (this would be done through the web interface)
+# For this lab, we'll create sample timeline data
+cat > ~/timeline_exports/autopsy_timeline.csv << 'EOF'
+timestamp,source,type,description,file_path
+2024-01-15T10:30:00Z,filesystem,file_created,Document created,/home/user1/Documents/report.txt
+2024-01-15T10:35:00Z,filesystem,file_accessed,File accessed,/home/user1/Documents/report.txt
+2024-01-15T11:00:00Z,system,login,User login event,/var/log/auth.log
+2024-01-15T11:15:00Z,filesystem,file_downloaded,Software downloaded,/home/user1/Downloads/software.zip
+2024-01-15T11:30:00Z,system,command,Command executed,/home/user1/.bash_history
+EOF
+Task 2: Build and Analyze Timeline using Timesketch
+Subtask 2.1: Install Timesketch Dependencies
+# Install Python and pip
+sudo apt install python3 python3-pip python3-venv -y
+
+# Install Docker for Timesketch
+sudo apt install docker.io docker-compose -y
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker $USER
+
+# Logout and login again for docker group changes
+newgrp docker
+Subtask 2.2: Deploy Timesketch
+# Clone Timesketch repository
+cd ~
+git clone https://github.com/google/timesketch.git
+cd timesketch
+
+# Start Timesketch using Docker Compose
+docker-compose up -d
+
+# Wait for services to start
+sleep 60
+
+# Check if services are running
+docker-compose ps
+Subtask 2.3: Access and Configure Timesketch
+# Create initial user account
+docker-compose exec timesketch-web tsctl create-user admin --password admin123
+
+# Access Timesketch web interface at http://localhost:5000
+echo "Timesketch is available at: http://localhost:5000"
+echo "Username: admin"
+echo "Password: admin123"
+Subtask 2.4: Prepare Timeline Data for Import
+# Convert CSV to Timesketch-compatible format
+cat > ~/timeline_exports/timesketch_timeline.jsonl << 'EOF'
+{"message": "Document created: /home/user1/Documents/report.txt", "timestamp": 1705316200, "datetime": "2024-01-15T10:30:00+00:00", "source_short": "filesystem", "source_long": "File System Activity"}
+{"message": "File accessed: /home/user1/Documents/report.txt", "timestamp": 1705316500, "datetime": "2024-01-15T10:35:00+00:00", "source_short": "filesystem", "source_long": "File System Activity"}
+{"message": "User login event", "timestamp": 1705318000, "datetime": "2024-01-15T11:00:00+00:00", "source_short": "system", "source_long": "System Events"}
+{"message": "Software downloaded: /home/user1/Downloads/software.zip", "timestamp": 1705318900, "datetime": "2024-01-15T11:15:00+00:00", "source_short": "filesystem", "source_long": "File System Activity"}
+{"message": "Command executed in bash history", "timestamp": 1705319800, "datetime": "2024-01-15T11:30:00+00:00", "source_short": "system", "source_long": "System Events"}
+EOF
+Subtask 2.5: Import Timeline into Timesketch
+# Copy timeline file to Timesketch container
+docker cp ~/timeline_exports/timesketch_timeline.jsonl timesketch-web:/tmp/
+
+# Import timeline using tsctl
+docker-compose exec timesketch-web tsctl import-timeline \
+  --timeline_name "User Device Interaction Timeline" \
+  --sketch_id 1 \
+  /tmp/timesketch_timeline.jsonl
+Subtask 2.6: Analyze Timeline Data
+Manual Analysis Steps in Timesketch Web Interface:
+
+Access Timeline View:
+
+Navigate to http://localhost:5000
+Login with admin credentials
+Select the created sketch
+Apply Filters:
+
+# Filter by source type
+source_short:"filesystem"
+
+# Filter by time range
+datetime:[2024-01-15T10:00:00 TO 2024-01-15T12:00:00]
+Create Analysis Views:
+
+Group events by source type
+Sort by timestamp
+Identify patterns in user activity
+Subtask 2.7: Generate Timeline Report
+# Export analysis results
+docker-compose exec timesketch-web tsctl export-timeline \
+  --sketch_id 1 \
+  --timeline_id 1 \
+  --output_format csv \
+  --output_file /tmp/timeline_analysis.csv
+
+# Copy exported file to host
+docker cp timesketch-web:/tmp/timeline_analysis.csv ~/timeline_exports/
+
+# View the analysis results
+head -20 ~/timeline_exports/timeline_analysis.csv
+Verification Steps
+Verify Autopsy Installation
+# Check if Autopsy is accessible
+curl -s http://localhost:9999 | grep -q "Autopsy" && echo "Autopsy is running" || echo "Autopsy not accessible"
+Verify Timesketch Installation
+# Check Timesketch services
+docker-compose ps | grep -E "(timesketch|elasticsearch|redis)"
+
+# Test API endpoint
+curl -s http://localhost:5000/api/v1/version/ | grep -q "version" && echo "Timesketch API is working" || echo "API not responding"
+Verify Timeline Data
+# Check imported timeline count
+wc -l ~/timeline_exports/timesketch_timeline.jsonl
+
+# Verify timeline structure
+head -1 ~/timeline_exports/timesketch_timeline.jsonl | python3 -m json.tool
+Common Issues and Solutions
+Issue: Docker permission denied
+
+# Solution: Add user to docker group and restart session
+sudo usermod -aG docker $USER
+newgrp docker
+Issue: Timesketch services not starting
+
+# Solution: Check system resources and restart services
+docker-compose down
+docker system prune -f
+docker-compose up -d
+Issue: Timeline import fails
+
+# Solution: Validate JSON format
+python3 -c "import json; [json.loads(line) for line in open('~/timeline_exports/timesketch_timeline.jsonl')]"
+Cleanup
+# Stop Timesketch services
+cd ~/timesketch
+docker-compose down
+
+# Remove containers and volumes
+docker-compose down -v
+
+# Clean up files
+rm -rf ~/forensic_data ~/timeline_exports ~/autopsy-4.20.0*
+Conclusion
+You have successfully completed Lab 15, where you extracted device interaction data using Autopsy and built a comprehensive timeline analysis using Timesketch. This lab demonstrated the critical process of forensic timeline reconstruction, which is essential for incident response, digital investigations, and security analysis. You learned to correlate multiple data sources, identify patterns in user behavior, and present findings in a structured timeline format. These skills are fundamental for cybersecurity professionals working in digital forensics, incident response, and threat hunting roles.
