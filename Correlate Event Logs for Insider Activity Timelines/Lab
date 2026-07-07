@@ -1,0 +1,724 @@
+ Correlate Event Logs for Insider Activity Timelines
+Objectives
+By completing this lab, you will:
+
+Extract and analyze Windows event logs for insider threat detection
+Correlate logon/logoff events and remote sessions to build activity timelines
+Use open-source tools to identify suspicious user behavior patterns
+Create comprehensive timelines for forensic investigation
+Prerequisites
+Basic understanding of Windows event logs
+Familiarity with Linux command line
+Knowledge of log analysis concepts
+Understanding of user authentication events
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux machine. The provided machine is bare metal with no pre-installed tools, so you will install all required tools during the lab.
+
+Task 1: Extract Relevant Event Logs
+Subtask 1.1: Install Required Tools
+Install the necessary tools for Windows event log analysis:
+
+sudo apt update
+sudo apt install -y python3 python3-pip git wget unzip
+pip3 install python-evtx xmltodict pandas
+Subtask 1.2: Download Sample Windows Event Logs
+Create sample Windows event logs for analysis:
+
+mkdir ~/insider-analysis
+cd ~/insider-analysis
+
+# Create sample Windows Security event log data
+cat > sample_security.evtx.xml << 'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<Events>
+  <Event>
+    <System>
+      <EventID>4624</EventID>
+      <TimeCreated SystemTime="2024-01-15T08:30:15.123Z"/>
+      <Computer>WORKSTATION01</Computer>
+    </System>
+    <EventData>
+      <Data Name="SubjectUserName">jsmith</Data>
+      <Data Name="TargetUserName">jsmith</Data>
+      <Data Name="LogonType">2</Data>
+      <Data Name="IpAddress">192.168.1.100</Data>
+    </EventData>
+  </Event>
+  <Event>
+    <System>
+      <EventID>4625</EventID>
+      <TimeCreated SystemTime="2024-01-15T08:45:22.456Z"/>
+      <Computer>WORKSTATION01</Computer>
+    </System>
+    <EventData>
+      <Data Name="SubjectUserName">-</Data>
+      <Data Name="TargetUserName">admin</Data>
+      <Data Name="LogonType">3</Data>
+      <Data Name="IpAddress">192.168.1.200</Data>
+    </EventData>
+  </Event>
+  <Event>
+    <System>
+      <EventID>4634</EventID>
+      <TimeCreated SystemTime="2024-01-15T17:15:30.789Z"/>
+      <Computer>WORKSTATION01</Computer>
+    </System>
+    <EventData>
+      <Data Name="TargetUserName">jsmith</Data>
+      <Data Name="LogonType">2</Data>
+    </EventData>
+  </Event>
+  <Event>
+    <System>
+      <EventID>4648</EventID>
+      <TimeCreated SystemTime="2024-01-15T14:20:45.321Z"/>
+      <Computer>WORKSTATION01</Computer>
+    </System>
+    <EventData>
+      <Data Name="SubjectUserName">jsmith</Data>
+      <Data Name="TargetUserName">administrator</Data>
+      <Data Name="TargetServerName">SERVER01</Data>
+      <Data Name="IpAddress">192.168.1.50</Data>
+    </EventData>
+  </Event>
+</Events>
+EOF
+Subtask 1.3: Create Event Log Parser
+Create a Python script to parse Windows event logs:
+
+cat > parse_events.py << 'EOF'
+#!/usr/bin/env python3
+import xml.etree.ElementTree as ET
+import pandas as pd
+from datetime import datetime
+import sys
+
+def parse_event_log(xml_file):
+    events = []
+    
+    try:
+        tree = ET.parse(xml_file)
+        root = tree.getroot()
+        
+        for event in root.findall('Event'):
+            event_data = {}
+            
+            # Extract System information
+            system = event.find('System')
+            if system is not None:
+                event_id = system.find('EventID')
+                time_created = system.find('TimeCreated')
+                computer = system.find('Computer')
+                
+                event_data['EventID'] = event_id.text if event_id is not None else 'Unknown'
+                event_data['TimeCreated'] = time_created.get('SystemTime') if time_created is not None else 'Unknown'
+                event_data['Computer'] = computer.text if computer is not None else 'Unknown'
+            
+            # Extract EventData
+            event_data_elem = event.find('EventData')
+            if event_data_elem is not None:
+                for data in event_data_elem.findall('Data'):
+                    name = data.get('Name')
+                    value = data.text if data.text else ''
+                    event_data[name] = value
+            
+            events.append(event_data)
+    
+    except Exception as e:
+        print(f"Error parsing XML: {e}")
+        return []
+    
+    return events
+
+def categorize_event(event_id):
+    categories = {
+        '4624': 'Successful Logon',
+        '4625': 'Failed Logon',
+        '4634': 'Logoff',
+        '4647': 'User Initiated Logoff',
+        '4648': 'Explicit Credential Use',
+        '4672': 'Special Privileges Assigned',
+        '4776': 'Domain Controller Authentication',
+        '4778': 'Session Reconnected',
+        '4779': 'Session Disconnected'
+    }
+    return categories.get(event_id, 'Other')
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python3 parse_events.py <xml_file>")
+        sys.exit(1)
+    
+    xml_file = sys.argv[1]
+    events = parse_event_log(xml_file)
+    
+    if not events:
+        print("No events found or error parsing file")
+        return
+    
+    # Convert to DataFrame for easier analysis
+    df = pd.DataFrame(events)
+    
+    # Add event category
+    df['Category'] = df['EventID'].apply(categorize_event)
+    
+    # Sort by time
+    df['TimeCreated'] = pd.to_datetime(df['TimeCreated'])
+    df = df.sort_values('TimeCreated')
+    
+    # Save to CSV
+    output_file = 'parsed_events.csv'
+    df.to_csv(output_file, index=False)
+    print(f"Parsed {len(events)} events and saved to {output_file}")
+    
+    # Display summary
+    print("\nEvent Summary:")
+    print(df['Category'].value_counts())
+    
+    return df
+
+if __name__ == "__main__":
+    main()
+EOF
+
+chmod +x parse_events.py
+Subtask 1.4: Parse Event Logs
+Execute the parser to extract event data:
+
+python3 parse_events.py sample_security.evtx.xml
+Task 2: Build and Analyze Activity Timeline
+Subtask 2.1: Create Timeline Analysis Script
+Create a comprehensive timeline analysis tool:
+
+cat > timeline_analyzer.py << 'EOF'
+#!/usr/bin/env python3
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
+import sys
+
+class InsiderActivityAnalyzer:
+    def __init__(self, csv_file):
+        self.df = pd.read_csv(csv_file)
+        self.df['TimeCreated'] = pd.to_datetime(self.df['TimeCreated'])
+        
+    def create_user_timeline(self, username=None):
+        """Create timeline for specific user or all users"""
+        if username:
+            user_events = self.df[self.df['TargetUserName'] == username].copy()
+            print(f"\nTimeline for user: {username}")
+        else:
+            user_events = self.df.copy()
+            print("\nTimeline for all users:")
+        
+        user_events = user_events.sort_values('TimeCreated')
+        
+        print("-" * 80)
+        print(f"{'Time':<20} {'Event':<20} {'User':<15} {'Details':<25}")
+        print("-" * 80)
+        
+        for _, event in user_events.iterrows():
+            time_str = event['TimeCreated'].strftime('%Y-%m-%d %H:%M:%S')
+            category = event['Category']
+            user = event.get('TargetUserName', 'N/A')
+            
+            # Build details string
+            details = []
+            if 'LogonType' in event and pd.notna(event['LogonType']):
+                logon_types = {
+                    '2': 'Interactive',
+                    '3': 'Network',
+                    '4': 'Batch',
+                    '5': 'Service',
+                    '7': 'Unlock',
+                    '8': 'NetworkCleartext',
+                    '9': 'NewCredentials',
+                    '10': 'RemoteInteractive',
+                    '11': 'CachedInteractive'
+                }
+                details.append(f"Type:{logon_types.get(str(int(event['LogonType'])), 'Unknown')}")
+            
+            if 'IpAddress' in event and pd.notna(event['IpAddress']) and event['IpAddress'] != '-':
+                details.append(f"IP:{event['IpAddress']}")
+            
+            if 'Computer' in event and pd.notna(event['Computer']):
+                details.append(f"Host:{event['Computer']}")
+            
+            details_str = " | ".join(details)[:25]
+            
+            print(f"{time_str:<20} {category:<20} {user:<15} {details_str:<25}")
+    
+    def detect_suspicious_patterns(self):
+        """Detect potentially suspicious insider activity patterns"""
+        print("\n" + "="*60)
+        print("SUSPICIOUS ACTIVITY ANALYSIS")
+        print("="*60)
+        
+        # Pattern 1: Failed login attempts
+        failed_logins = self.df[self.df['EventID'] == '4625']
+        if not failed_logins.empty:
+            print(f"\n1. Failed Login Attempts: {len(failed_logins)}")
+            for _, event in failed_logins.iterrows():
+                time_str = event['TimeCreated'].strftime('%Y-%m-%d %H:%M:%S')
+                user = event.get('TargetUserName', 'Unknown')
+                ip = event.get('IpAddress', 'Unknown')
+                print(f"   {time_str} - User: {user}, IP: {ip}")
+        
+        # Pattern 2: Privilege escalation attempts
+        priv_events = self.df[self.df['EventID'] == '4648']
+        if not priv_events.empty:
+            print(f"\n2. Explicit Credential Use (Potential Privilege Escalation): {len(priv_events)}")
+            for _, event in priv_events.iterrows():
+                time_str = event['TimeCreated'].strftime('%Y-%m-%d %H:%M:%S')
+                source_user = event.get('SubjectUserName', 'Unknown')
+                target_user = event.get('TargetUserName', 'Unknown')
+                target_server = event.get('TargetServerName', 'Unknown')
+                print(f"   {time_str} - {source_user} -> {target_user} on {target_server}")
+        
+        # Pattern 3: Off-hours activity
+        self.df['Hour'] = self.df['TimeCreated'].dt.hour
+        off_hours = self.df[(self.df['Hour'] < 7) | (self.df['Hour'] > 19)]
+        if not off_hours.empty:
+            print(f"\n3. Off-Hours Activity (Before 7 AM or After 7 PM): {len(off_hours)}")
+            for _, event in off_hours.iterrows():
+                time_str = event['TimeCreated'].strftime('%Y-%m-%d %H:%M:%S')
+                user = event.get('TargetUserName', 'Unknown')
+                category = event['Category']
+                print(f"   {time_str} - User: {user}, Activity: {category}")
+        
+        # Pattern 4: Rapid successive logons/logoffs
+        logon_events = self.df[self.df['EventID'].isin(['4624', '4634'])].sort_values('TimeCreated')
+        if len(logon_events) > 1:
+            rapid_events = []
+            for i in range(1, len(logon_events)):
+                time_diff = (logon_events.iloc[i]['TimeCreated'] - logon_events.iloc[i-1]['TimeCreated']).total_seconds()
+                if time_diff < 300:  # Less than 5 minutes
+                    rapid_events.append((logon_events.iloc[i-1], logon_events.iloc[i], time_diff))
+            
+            if rapid_events:
+                print(f"\n4. Rapid Logon/Logoff Sequences (< 5 minutes apart): {len(rapid_events)}")
+                for prev_event, curr_event, time_diff in rapid_events:
+                    prev_time = prev_event['TimeCreated'].strftime('%Y-%m-%d %H:%M:%S')
+                    curr_time = curr_event['TimeCreated'].strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"   {prev_time} -> {curr_time} ({time_diff:.0f}s apart)")
+    
+    def generate_summary_report(self):
+        """Generate comprehensive summary report"""
+        print("\n" + "="*60)
+        print("ACTIVITY SUMMARY REPORT")
+        print("="*60)
+        
+        # Time range
+        start_time = self.df['TimeCreated'].min()
+        end_time = self.df['TimeCreated'].max()
+        print(f"Analysis Period: {start_time} to {end_time}")
+        
+        # Event counts by category
+        print(f"\nTotal Events Analyzed: {len(self.df)}")
+        print("\nEvent Breakdown:")
+        category_counts = self.df['Category'].value_counts()
+        for category, count in category_counts.items():
+            print(f"  {category}: {count}")
+        
+        # Unique users
+        unique_users = self.df['TargetUserName'].dropna().unique()
+        print(f"\nUnique Users: {len(unique_users)}")
+        for user in unique_users:
+            if user != '-':
+                user_events = len(self.df[self.df['TargetUserName'] == user])
+                print(f"  {user}: {user_events} events")
+        
+        # Unique computers
+        unique_computers = self.df['Computer'].dropna().unique()
+        print(f"\nUnique Computers: {len(unique_computers)}")
+        for computer in unique_computers:
+            computer_events = len(self.df[self.df['Computer'] == computer])
+            print(f"  {computer}: {computer_events} events")
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python3 timeline_analyzer.py <csv_file> [username]")
+        sys.exit(1)
+    
+    csv_file = sys.argv[1]
+    username = sys.argv[2] if len(sys.argv) > 2 else None
+    
+    try:
+        analyzer = InsiderActivityAnalyzer(csv_file)
+        
+        # Create timeline
+        analyzer.create_user_timeline(username)
+        
+        # Detect suspicious patterns
+        analyzer.detect_suspicious_patterns()
+        
+        # Generate summary report
+        analyzer.generate_summary_report()
+        
+    except Exception as e:
+        print(f"Error: {e}")
+
+if __name__ == "__main__":
+    main()
+EOF
+
+chmod +x timeline_analyzer.py
+Subtask 2.2: Analyze Timeline and Detect Patterns
+Run the timeline analysis on the parsed event data:
+
+# Analyze all user activity
+python3 timeline_analyzer.py parsed_events.csv
+
+# Analyze specific user activity
+python3 timeline_analyzer.py parsed_events.csv jsmith
+Subtask 2.3: Create Enhanced Sample Data
+Create more comprehensive sample data for better analysis:
+
+cat > enhanced_security.evtx.xml << 'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<Events>
+  <!-- Normal morning logon -->
+  <Event>
+    <System>
+      <EventID>4624</EventID>
+      <TimeCreated SystemTime="2024-01-15T08:30:15.123Z"/>
+      <Computer>WORKSTATION01</Computer>
+    </System>
+    <EventData>
+      <Data Name="SubjectUserName">jsmith</Data>
+      <Data Name="TargetUserName">jsmith</Data>
+      <Data Name="LogonType">2</Data>
+      <Data Name="IpAddress">192.168.1.100</Data>
+    </EventData>
+  </Event>
+  
+  <!-- Suspicious off-hours activity -->
+  <Event>
+    <System>
+      <EventID>4624</EventID>
+      <TimeCreated SystemTime="2024-01-15T23:45:30.456Z"/>
+      <Computer>WORKSTATION01</Computer>
+    </System>
+    <EventData>
+      <Data Name="SubjectUserName">jsmith</Data>
+      <Data Name="TargetUserName">jsmith</Data>
+      <Data Name="LogonType">10</Data>
+      <Data Name="IpAddress">192.168.1.250</Data>
+    </EventData>
+  </Event>
+  
+  <!-- Failed admin login attempt -->
+  <Event>
+    <System>
+      <EventID>4625</EventID>
+      <TimeCreated SystemTime="2024-01-15T23:50:22.789Z"/>
+      <Computer>SERVER01</Computer>
+    </System>
+    <EventData>
+      <Data Name="SubjectUserName">-</Data>
+      <Data Name="TargetUserName">administrator</Data>
+      <Data Name="LogonType">3</Data>
+      <Data Name="IpAddress">192.168.1.250</Data>
+    </EventData>
+  </Event>
+  
+  <!-- Privilege escalation attempt -->
+  <Event>
+    <System>
+      <EventID>4648</EventID>
+      <TimeCreated SystemTime="2024-01-15T23:52:45.321Z"/>
+      <Computer>WORKSTATION01</Computer>
+    </System>
+    <EventData>
+      <Data Name="SubjectUserName">jsmith</Data>
+      <Data Name="TargetUserName">administrator</Data>
+      <Data Name="TargetServerName">SERVER01</Data>
+      <Data Name="IpAddress">192.168.1.250</Data>
+    </EventData>
+  </Event>
+  
+  <!-- Rapid logoff after suspicious activity -->
+  <Event>
+    <System>
+      <EventID>4634</EventID>
+      <TimeCreated SystemTime="2024-01-15T23:55:30.654Z"/>
+      <Computer>WORKSTATION01</Computer>
+    </System>
+    <EventData>
+      <Data Name="TargetUserName">jsmith</Data>
+      <Data Name="LogonType">10</Data>
+    </EventData>
+  </Event>
+  
+  <!-- Normal end of day logoff -->
+  <Event>
+    <System>
+      <EventID>4634</EventID>
+      <TimeCreated SystemTime="2024-01-15T17:15:30.987Z"/>
+      <Computer>WORKSTATION01</Computer>
+    </System>
+    <EventData>
+      <Data Name="TargetUserName">jsmith</Data>
+      <Data Name="LogonType">2</Data>
+    </EventData>
+  </Event>
+</Events>
+EOF
+
+# Parse the enhanced data
+python3 parse_events.py enhanced_security.evtx.xml
+
+# Analyze the enhanced timeline
+python3 timeline_analyzer.py parsed_events.csv
+Subtask 2.4: Create Visual Timeline Report
+Create a script to generate visual timeline reports:
+
+cat > visual_timeline.py << 'EOF'
+#!/usr/bin/env python3
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from datetime import datetime
+import sys
+
+def create_visual_timeline(csv_file):
+    # Read the data
+    df = pd.read_csv(csv_file)
+    df['TimeCreated'] = pd.to_datetime(df['TimeCreated'])
+    
+    # Create figure and axis
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10))
+    
+    # Timeline plot
+    event_colors = {
+        'Successful Logon': 'green',
+        'Failed Logon': 'red',
+        'Logoff': 'blue',
+        'Explicit Credential Use': 'orange',
+        'Other': 'gray'
+    }
+    
+    for category in df['Category'].unique():
+        category_data = df[df['Category'] == category]
+        ax1.scatter(category_data['TimeCreated'], 
+                   [category] * len(category_data),
+                   c=event_colors.get(category, 'gray'),
+                   s=100, alpha=0.7, label=category)
+    
+    ax1.set_xlabel('Time')
+    ax1.set_ylabel('Event Type')
+    ax1.set_title('Event Timeline')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Format x-axis
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax1.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
+    
+    # Event count by hour
+    df['Hour'] = df['TimeCreated'].dt.hour
+    hourly_counts = df.groupby('Hour').size()
+    
+    ax2.bar(hourly_counts.index, hourly_counts.values, alpha=0.7, color='skyblue')
+    ax2.set_xlabel('Hour of Day')
+    ax2.set_ylabel('Event Count')
+    ax2.set_title('Event Distribution by Hour')
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xticks(range(0, 24, 2))
+    
+    plt.tight_layout()
+    plt.savefig('timeline_analysis.png', dpi=300, bbox_inches='tight')
+    print("Visual timeline saved as 'timeline_analysis.png'")
+    
+    # Show the plot (if display is available)
+    try:
+        plt.show()
+    except:
+        print("Display not available, but chart saved to file.")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python3 visual_timeline.py <csv_file>")
+        sys.exit(1)
+    
+    create_visual_timeline(sys.argv[1])
+EOF
+
+# Install matplotlib for visualization
+pip3 install matplotlib
+
+# Generate visual timeline
+python3 visual_timeline.py parsed_events.csv
+Subtask 2.5: Generate Final Investigation Report
+Create a comprehensive investigation report:
+
+cat > generate_report.py << 'EOF'
+#!/usr/bin/env python3
+import pandas as pd
+from datetime import datetime
+import sys
+
+def generate_investigation_report(csv_file):
+    df = pd.read_csv(csv_file)
+    df['TimeCreated'] = pd.to_datetime(df['TimeCreated'])
+    
+    report_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    report = f"""
+INSIDER THREAT INVESTIGATION REPORT
+Generated: {report_time}
+Data Source: {csv_file}
+
+{'='*60}
+EXECUTIVE SUMMARY
+{'='*60}
+
+This report analyzes Windows Security Event Logs to identify potential
+insider threat activities. The analysis covers logon/logoff events,
+failed authentication attempts, and privilege escalation indicators.
+
+Analysis Period: {df['TimeCreated'].min()} to {df['TimeCreated'].max()}
+Total Events: {len(df)}
+Unique Users: {len(df['TargetUserName'].dropna().unique())}
+Unique Systems: {len(df['Computer'].dropna().unique())}
+
+{'='*60}
+KEY FINDINGS
+{'='*60}
+
+"""
+    
+    # Analyze findings
+    findings = []
+    
+    # Failed logins
+    failed_logins = df[df['EventID'] == '4625']
+    if not failed_logins.empty:
+        findings.append(f"• {len(failed_logins)} failed login attempts detected")
+        for _, event in failed_logins.iterrows():
+            findings.append(f"  - {event['TimeCreated']}: User '{event.get('TargetUserName', 'Unknown')}' from IP {event.get('IpAddress', 'Unknown')}")
+    
+    # Privilege escalation
+    priv_events = df[df['EventID'] == '4648']
+    if not priv_events.empty:
+        findings.append(f"• {len(priv_events)} explicit credential use events (potential privilege escalation)")
+        for _, event in priv_events.iterrows():
+            findings.append(f"  - {event['TimeCreated']}: {event.get('SubjectUserName', 'Unknown')} -> {event.get('TargetUserName', 'Unknown')}")
+    
+    # Off-hours activity
+    df['Hour'] = df['TimeCreated'].dt.hour
+    off_hours = df[(df['Hour'] < 7) | (df['Hour'] > 19)]
+    if not off_hours.empty:
+        findings.append(f"• {len(off_hours)} off-hours activities detected")
+        for _, event in off_hours.iterrows():
+            findings.append(f"  - {event['TimeCreated']}: {event['Category']} by {event.get('TargetUserName', 'Unknown')}")
+    
+    if not findings:
+        findings.append("• No suspicious activities detected in the analyzed timeframe")
+    
+    report += "\n".join(findings)
+    
+    report += f"""
+
+{'='*60}
+DETAILED EVENT BREAKDOWN
+{'='*60}
+
+Event Type Distribution:
+"""
+    
+    for category, count in df['Category'].value_counts().items():
+        report += f"• {category}: {count} events\n"
+    
+    report += f"""
+{'='*60}
+RECOMMENDATIONS
+{'='*60}
+
+Based on the analysis, the following actions are recommended:
+
+1. IMMEDIATE ACTIONS:
+   • Review all failed login attempts for potential brute force attacks
+   • Investigate off-hours activities for unauthorized access
+   • Verify all privilege escalation events with users
+
+2. ONGOING MONITORING:
+   • Implement real-time alerting for failed login attempts
+   • Monitor off-hours access patterns
+   • Track privilege escalation events
+   • Establish baseline user behavior patterns
+
+3. SECURITY ENHANCEMENTS:
+   • Implement multi-factor authentication
+   • Restrict off-hours access where possible
+   • Monitor privileged account usage
+   • Regular access reviews and audits
+
+{'='*60}
+TECHNICAL DETAILS
+{'='*60}
+
+Event ID Meanings:
+• 4624: Successful Logon
+• 4625: Failed Logon Attempt
+• 4634: Account Logoff
+• 4648: Explicit Credential Use (RunAs, etc.)
+
+Logon Types:
+• Type 2: Interactive (console logon)
+• Type 3: Network (accessing shared resources)
+• Type 10: Remote Interactive (RDP, Terminal Services)
+
+This report should be reviewed by security personnel and appropriate
+actions taken based on the findings and recommendations.
+"""
+    
+    # Save report
+    with open('insider_threat_report.txt', 'w') as f:
+        f.write(report)
+    
+    print("Investigation report generated: insider_threat_report.txt")
+    print("\nReport Summary:")
+    print(f"- Total events analyzed: {len(df)}")
+    print(f"- Failed logins: {len(failed_logins)}")
+    print(f"- Privilege escalations: {len(priv_events)}")
+    print(f"- Off-hours activities: {len(off_hours)}")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python3 generate_report.py <csv_file>")
+        sys.exit(1)
+    
+    generate_investigation_report(sys.argv[1])
+EOF
+
+# Generate the final report
+python3 generate_report.py parsed_events.csv
+Subtask 2.6: Review Results
+View the generated analysis results:
+
+# View the investigation report
+cat insider_threat_report.txt
+
+# List all generated files
+echo "Generated files:"
+ls -la *.csv *.txt *.png *.py
+Verification
+Verify your lab completion by checking:
+
+Event Log Parsing: Confirm parsed_events.csv contains structured event data
+Timeline Analysis: Review timeline output showing chronological event sequence
+Suspicious Pattern Detection: Verify detection of failed logins, off-hours activity, and privilege escalation
+Investigation Report: Check insider_threat_report.txt for comprehensive findings
+Visual Timeline: Confirm timeline_analysis.png shows event distribution
+Conclusion
+You have successfully completed the insider activity timeline correlation lab. You learned to:
+
+Extract and parse Windows Security Event Logs using open-source tools
+Build comprehensive timelines of user activities
+Identify suspicious patterns including failed logins, off-hours access, and privilege escalation attempts
+Generate professional investigation reports for security teams
+These skills are essential for cybersecurity analysts, digital forensics investigators, and security operations center (SOC) analysts who need to detect and investigate insider threats. The timeline correlation techniques you practiced help identify malicious insider activities that could lead to data breaches, intellectual property theft, or system compromise.
+
+The open-source approach demonstrated in this lab provides cost-effective solutions for organizations of all sizes to implement insider threat detection capabilities.
