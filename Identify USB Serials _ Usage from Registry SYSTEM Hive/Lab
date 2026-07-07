@@ -1,0 +1,300 @@
+Identify USB Serials & Usage from Registry SYSTEM Hive
+Learning Objectives
+By completing this lab, you will:
+
+Extract USB device serial numbers from Windows registry SYSTEM hive
+Analyze USB device connection timestamps and usage patterns
+Use open-source forensic tools to parse registry data on Linux
+Interpret USB device artifacts for digital forensics investigations
+Prerequisites
+Basic understanding of Windows registry structure
+Familiarity with Linux command line operations
+Knowledge of hexadecimal data interpretation
+Understanding of digital forensics concepts
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install the required forensic tools during the lab.
+
+Required Tools Installation
+Task 1: Install Registry Analysis Tools
+Subtask 1.1: Update System and Install Dependencies
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y python3 python3-pip git build-essential libregf-dev libregf-utils
+Subtask 1.2: Install Registry Analysis Tools
+# Install regripper for registry parsing
+git clone https://github.com/keydet89/RegRipper3.0.git
+cd RegRipper3.0
+sudo cp rip.pl /usr/local/bin/
+sudo chmod +x /usr/local/bin/rip.pl
+cd ..
+
+# Install python-registry for additional parsing
+pip3 install python-registry
+Subtask 1.3: Download Sample SYSTEM Hive
+# Create working directory
+mkdir ~/usb_analysis
+cd ~/usb_analysis
+
+# Download sample Windows SYSTEM hive (or use provided sample)
+wget -O SYSTEM "https://github.com/EricZimmerman/RegistryExplorer/raw/master/RegistryExplorer.Test/TestFiles/SYSTEM"
+Task 1: Parse SYSTEM Hive for USB Serial Information
+Subtask 1.1: Extract USB Device Information
+# Use regripper to extract USB device data
+rip.pl -r SYSTEM -p usbstor > usb_devices.txt
+rip.pl -r SYSTEM -p usbstor2 >> usb_devices.txt
+
+# Extract USB serial numbers specifically
+rip.pl -r SYSTEM -p usb >> usb_serials.txt
+Subtask 1.2: Parse USB Storage Devices
+Create a Python script to extract detailed USB information:
+
+#!/usr/bin/env python3
+# usb_parser.py
+
+from Registry import Registry
+import sys
+from datetime import datetime
+
+def parse_usb_devices(system_hive):
+    reg = Registry.Registry(system_hive)
+    
+    print("=== USB Device Analysis ===\n")
+    
+    try:
+        # Parse USBSTOR key for storage devices
+        usbstor_key = reg.open("ControlSet001\\Enum\\USBSTOR")
+        
+        for device_key in usbstor_key.subkeys():
+            print(f"Device: {device_key.name()}")
+            
+            for instance_key in device_key.subkeys():
+                print(f"  Serial/Instance: {instance_key.name()}")
+                
+                try:
+                    # Get device properties
+                    friendly_name = instance_key.value("FriendlyName").value()
+                    print(f"  Friendly Name: {friendly_name}")
+                except:
+                    pass
+                
+                try:
+                    first_install = instance_key.value("FirstInstallTime").value()
+                    # Convert Windows FILETIME to readable format
+                    timestamp = datetime.fromtimestamp((first_install - 116444736000000000) / 10000000)
+                    print(f"  First Install: {timestamp}")
+                except:
+                    pass
+                
+                print(f"  Last Write Time: {instance_key.timestamp()}")
+                print("-" * 50)
+                
+    except Registry.RegistryKeyNotFoundException:
+        print("USBSTOR key not found")
+    
+    # Parse USB key for additional device info
+    try:
+        usb_key = reg.open("ControlSet001\\Enum\\USB")
+        print("\n=== USB Device Details ===\n")
+        
+        for vid_pid_key in usb_key.subkeys():
+            if "VID_" in vid_pid_key.name():
+                print(f"VID/PID: {vid_pid_key.name()}")
+                
+                for serial_key in vid_pid_key.subkeys():
+                    print(f"  Serial: {serial_key.name()}")
+                    print(f"  Last Write: {serial_key.timestamp()}")
+                    print("-" * 30)
+                    
+    except Registry.RegistryKeyNotFoundException:
+        print("USB key not found")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python3 usb_parser.py <SYSTEM_hive>")
+        sys.exit(1)
+    
+    parse_usb_devices(sys.argv[1])
+Save and run the script:
+
+# Save the script
+cat > usb_parser.py << 'EOF'
+[Insert the Python code above]
+EOF
+
+# Make executable and run
+chmod +x usb_parser.py
+python3 usb_parser.py SYSTEM
+Subtask 1.3: Extract USB Serial Numbers
+# Create focused serial extraction script
+cat > extract_serials.py << 'EOF'
+#!/usr/bin/env python3
+from Registry import Registry
+import sys
+
+def extract_serials(system_hive):
+    reg = Registry.Registry(system_hive)
+    serials = []
+    
+    try:
+        usbstor_key = reg.open("ControlSet001\\Enum\\USBSTOR")
+        
+        for device in usbstor_key.subkeys():
+            for instance in device.subkeys():
+                serial = instance.name()
+                if serial != "Properties" and len(serial) > 5:
+                    serials.append({
+                        'device': device.name(),
+                        'serial': serial,
+                        'timestamp': instance.timestamp()
+                    })
+    except:
+        pass
+    
+    print("USB Device Serials Found:")
+    print("=" * 60)
+    for item in serials:
+        print(f"Device: {item['device']}")
+        print(f"Serial: {item['serial']}")
+        print(f"Last Modified: {item['timestamp']}")
+        print("-" * 40)
+
+if __name__ == "__main__":
+    extract_serials(sys.argv[1])
+EOF
+
+python3 extract_serials.py SYSTEM
+Task 2: Analyze Device Connection Timestamps
+Subtask 2.1: Extract Connection Timeline
+# Create timeline analysis script
+cat > usb_timeline.py << 'EOF'
+#!/usr/bin/env python3
+from Registry import Registry
+import sys
+from datetime import datetime
+
+def analyze_timeline(system_hive):
+    reg = Registry.Registry(system_hive)
+    timeline = []
+    
+    # Collect timestamps from multiple sources
+    sources = [
+        "ControlSet001\\Enum\\USBSTOR",
+        "ControlSet001\\Enum\\USB"
+    ]
+    
+    for source in sources:
+        try:
+            key = reg.open(source)
+            collect_timestamps(key, timeline, source)
+        except:
+            continue
+    
+    # Sort by timestamp
+    timeline.sort(key=lambda x: x['timestamp'])
+    
+    print("USB Device Connection Timeline:")
+    print("=" * 70)
+    for event in timeline:
+        print(f"{event['timestamp']} | {event['source']} | {event['device']}")
+
+def collect_timestamps(key, timeline, source):
+    for subkey in key.subkeys():
+        timeline.append({
+            'timestamp': subkey.timestamp(),
+            'source': source.split('\\')[-1],
+            'device': subkey.name()
+        })
+        
+        # Recursively collect from subkeys
+        for sub_subkey in subkey.subkeys():
+            timeline.append({
+                'timestamp': sub_subkey.timestamp(),
+                'source': f"{source.split('\\')[-1]}/{subkey.name()}",
+                'device': sub_subkey.name()
+            })
+
+if __name__ == "__main__":
+    analyze_timeline(sys.argv[1])
+EOF
+
+python3 usb_timeline.py SYSTEM
+Subtask 2.2: Generate Usage Report
+# Create comprehensive USB usage report
+cat > usb_report.py << 'EOF'
+#!/usr/bin/env python3
+from Registry import Registry
+import sys
+from collections import defaultdict
+
+def generate_report(system_hive):
+    reg = Registry.Registry(system_hive)
+    
+    print("USB DEVICE FORENSIC REPORT")
+    print("=" * 50)
+    print()
+    
+    # Device summary
+    device_count = defaultdict(int)
+    unique_serials = set()
+    
+    try:
+        usbstor_key = reg.open("ControlSet001\\Enum\\USBSTOR")
+        
+        for device in usbstor_key.subkeys():
+            device_type = device.name().split('&')[0]
+            device_count[device_type] += 1
+            
+            for instance in device.subkeys():
+                if instance.name() != "Properties":
+                    unique_serials.add(instance.name())
+    except:
+        pass
+    
+    print(f"Total Device Types: {len(device_count)}")
+    print(f"Unique Serial Numbers: {len(unique_serials)}")
+    print()
+    
+    print("Device Type Summary:")
+    for device_type, count in device_count.items():
+        print(f"  {device_type}: {count} instances")
+    
+    print("\nUnique Serial Numbers:")
+    for serial in sorted(unique_serials):
+        print(f"  {serial}")
+
+if __name__ == "__main__":
+    generate_report(sys.argv[1])
+EOF
+
+python3 usb_report.py SYSTEM
+Subtask 2.3: Verify Results
+# Compare results with regripper output
+echo "=== Verification ==="
+echo "Comparing manual parsing with regripper results..."
+
+# Count devices found by each method
+echo "RegRipper USB devices:"
+grep -c "Device:" usb_devices.txt
+
+echo "Python parser results:"
+python3 usb_parser.py SYSTEM | grep -c "Device:"
+
+# Show summary
+echo -e "\n=== Final Summary ==="
+python3 usb_report.py SYSTEM
+Lab Verification
+Verify Your Results
+Check extracted serial numbers - Ensure you have identified unique USB device serials
+Validate timestamps - Confirm connection times are properly parsed
+Cross-reference data - Compare results between different parsing methods
+# Final verification commands
+ls -la ~/usb_analysis/
+wc -l usb_devices.txt usb_serials.txt
+echo "Lab completed successfully!"
+Conclusion
+You have successfully completed USB device forensics analysis using the Windows registry SYSTEM hive. You learned to:
+
+Extract USB device serial numbers from registry artifacts
+Parse connection timestamps to build usage timelines
+Use multiple open-source tools for comprehensive analysis
+Generate forensic reports for USB device activity
+This knowledge is essential for digital forensics investigations, incident response, and understanding device usage patterns on Windows systems. The techniques demonstrated help identify when USB devices were connected, their unique identifiers, and usage patterns critical for forensic analysis.
